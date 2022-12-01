@@ -10,7 +10,7 @@ defaultArgs:
   codeCommit: 239fa626a44652cebf293a994a3330e90e873daa
   codeQuality: stable
   noVerifyJBPlugin: false
-  intellijDownloadUrl: "https://download.jetbrains.com/idea/ideaIU-2022.2.3.tar.gz"
+  intellijDownloadUrl: "https://download.jetbrains.com/idea/ideaIU-2022.3.tar.gz"
   golandDownloadUrl: "https://download.jetbrains.com/go/goland-2022.2.4.tar.gz"
   pycharmDownloadUrl: "https://download.jetbrains.com/python/pycharm-professional-2022.2.3.tar.gz"
   phpstormDownloadUrl: "https://download.jetbrains.com/webide/PhpStorm-2022.2.3.tar.gz"
