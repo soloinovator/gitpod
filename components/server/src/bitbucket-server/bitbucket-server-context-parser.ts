@@ -13,6 +13,7 @@ import { AbstractContextParser, IContextParser, URLParts } from "../workspace/co
 import { URL } from "url";
 import { BitbucketServer, BitbucketServerApi } from "./bitbucket-server-api";
 import { BitbucketServerTokenHelper } from "./bitbucket-server-token-handler";
+import { handleBitbucketError } from "./utils";
 
 const DEFAULT_BRANCH = "master";
 
@@ -31,14 +32,46 @@ export class BitbucketServerContextParser extends AbstractContextParser implemen
                 contextUrl,
             );
 
-            if (searchParams.has("at")) {
-                const branchName = this.toSimpleBranchName(decodeURIComponent(searchParams.get("at")!));
-                more.ref = branchName;
-                more.refType = "branch";
-            } else if (searchParams.has("until")) {
-                const branchName = this.toSimpleBranchName(decodeURIComponent(searchParams.get("until")!));
-                more.ref = branchName;
-                more.refType = "branch";
+            const searchParamsRef = searchParams.get("at") ?? searchParams.get("until");
+            if (searchParamsRef) {
+                if (searchParamsRef.startsWith("refs/tags/")) {
+                    more.ref = this.toSimplifiedTagName(searchParamsRef);
+                    more.refType = "tag";
+                } else if (searchParamsRef.startsWith("refs/heads/")) {
+                    more.ref = this.toSimpleBranchName(searchParamsRef);
+                    more.refType = "branch";
+                } else {
+                    const branchCandidate = await this.api
+                        .getBranch(user, {
+                            repoKind,
+                            branchName: searchParamsRef,
+                            owner,
+                            repositorySlug: repoName,
+                        })
+                        .catch((error) => {
+                            if (error?.message?.startsWith("Could not find branch")) {
+                                return undefined;
+                            }
+
+                            throw error;
+                        });
+
+                    if (branchCandidate) {
+                        more.ref = branchCandidate.displayId;
+                        more.refType = "branch";
+                    } else {
+                        const tagCandidate = await this.api.getTagLatestCommit(user, {
+                            repoKind,
+                            tag: searchParamsRef,
+                            owner,
+                            repositorySlug: repoName,
+                        });
+                        if (tagCandidate) {
+                            more.ref = tagCandidate.displayId;
+                            more.refType = "tag";
+                        }
+                    }
+                }
             }
 
             if (moreSegments[0] === "pull-requests" && !!moreSegments[1]) {
@@ -55,8 +88,9 @@ export class BitbucketServerContextParser extends AbstractContextParser implemen
 
             return await this.handleNavigatorContext(ctx, user, repoKind, host, owner, repoName, more);
         } catch (e) {
-            span.addTags({ contextUrl }).log({ error: e });
-            log.error({ userId: user.id }, "Error parsing Bitbucket context", e);
+            const error = e instanceof Error ? handleBitbucketError(e) : e;
+            span.addTags({ contextUrl }).log({ error });
+            log.error({ userId: user.id }, "Error parsing Bitbucket context", error);
             throw e;
         } finally {
             span.finish();
@@ -67,6 +101,12 @@ export class BitbucketServerContextParser extends AbstractContextParser implemen
     // we need to parse the simple branch name `foo`.
     public toSimpleBranchName(qualifiedBranchName: string | undefined) {
         return qualifiedBranchName?.replace("refs/heads/", "");
+    }
+
+    // Example: For a given context URL https://HOST/projects/FOO/repos/repo123/browse?at=refs%2tags%2Ffoo
+    // we need to parse the simple tag name `foo`.
+    public toSimplifiedTagName(qualifiedTagName?: string) {
+        return qualifiedTagName?.replace("refs/tags/", "");
     }
 
     public async parseURL(user: User, contextUrl: string): Promise<{ repoKind: "projects" | "users" } & URLParts> {
@@ -137,7 +177,7 @@ export class BitbucketServerContextParser extends AbstractContextParser implemen
     ): Promise<NavigatorContext> {
         const span = TraceContext.startSpan("BitbucketServerContextParser.handleNavigatorContext", ctx);
         try {
-            const repo = await this.api.getRepository(user, {
+            const repoPromise = this.api.getRepository(user, {
                 repoKind,
                 owner,
                 repositorySlug: repoName,
@@ -147,6 +187,7 @@ export class BitbucketServerContextParser extends AbstractContextParser implemen
                 owner,
                 repositorySlug: repoName,
             });
+            const repo = await repoPromise;
             const repository = this.toRepository(host, repo, repoKind, defaultBranch);
             span.log({ "request.finished": "" });
 
@@ -163,7 +204,7 @@ export class BitbucketServerContextParser extends AbstractContextParser implemen
             if (!more.revision) {
                 more.ref = more.ref || repository.defaultBranch;
             }
-            more.refType = more.refType || "branch";
+            more.refType = more.refType ?? "branch";
             if (!more.revision) {
                 switch (more.refType) {
                     case "branch": {
@@ -231,8 +272,9 @@ export class BitbucketServerContextParser extends AbstractContextParser implemen
                 repository,
             };
         } catch (e) {
-            span.log({ error: e });
-            log.error({ userId: user.id }, "Error parsing Bitbucket navigator request context", e);
+            const error = e instanceof Error ? handleBitbucketError(e) : e;
+            span.log({ error });
+            log.error({ userId: user.id }, "Error parsing Bitbucket navigator request context", error);
             throw e;
         } finally {
             span.finish();
@@ -246,7 +288,7 @@ export class BitbucketServerContextParser extends AbstractContextParser implemen
         defaultBranch: BitbucketServer.Branch,
     ): Repository {
         const owner = repo.project.owner ? repo.project.owner.slug : repo.project.key;
-        const name = repo.name;
+        const name = repo.slug;
         const cloneUrl = repo.links.clone.find((u) => u.name === "http")?.href!;
         const webUrl = repo.links?.self[0]?.href?.replace(/\/browse$/, "");
 
@@ -259,6 +301,7 @@ export class BitbucketServerContextParser extends AbstractContextParser implemen
             repoKind,
             private: !repo.public,
             defaultBranch: defaultBranch.displayId || DEFAULT_BRANCH,
+            displayName: repo.name,
         };
 
         return result;

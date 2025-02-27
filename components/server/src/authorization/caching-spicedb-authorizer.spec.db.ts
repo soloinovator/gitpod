@@ -38,9 +38,7 @@ describe("CachingSpiceDBAuthorizer", async () => {
                 },
             }),
         } as any as ConfigProvider);
-        Experiments.configureTestingClient({
-            centralizedPermissions: true,
-        });
+        Experiments.configureTestingClient({});
         userSvc = container.get<UserService>(UserService);
         orgSvc = container.get<OrganizationService>(OrganizationService);
         workspaceSvc = container.get<WorkspaceService>(WorkspaceService);
@@ -51,7 +49,7 @@ describe("CachingSpiceDBAuthorizer", async () => {
         // Clean-up database
         await resetDB(container.get(TypeORM));
 
-        container.unbindAll();
+        await container.unbindAllAsync();
     });
 
     it("should avoid new-enemy after removal", async () => {
@@ -143,6 +141,7 @@ describe("CachingSpiceDBAuthorizer", async () => {
                 revision: "asdf",
             },
             "github.com/gitpod-io/gitpod",
+            undefined,
         );
         return ws;
     }

@@ -29,7 +29,7 @@ export class ContextService {
     constructor(
         @inject(TracedWorkspaceDB) private readonly workspaceDb: DBWithTracing<WorkspaceDB>,
         @inject(ContextParser) private contextParser: ContextParser,
-        @inject(IncrementalWorkspaceService) private readonly incrementalPrebuildsService: IncrementalWorkspaceService,
+        @inject(IncrementalWorkspaceService) private readonly incrementalWorkspaceService: IncrementalWorkspaceService,
         @inject(ConfigProvider) private readonly configProvider: ConfigProvider,
 
         @inject(ProjectsService) private readonly projectsService: ProjectsService,
@@ -57,14 +57,15 @@ export class ContextService {
             }
         } else {
             const configPromise = this.configProvider.fetchConfig({}, user, context, organizationId);
-            const history = await this.incrementalPrebuildsService.getCommitHistoryForContext(context, user);
+            const history = await this.incrementalWorkspaceService.getCommitHistoryForContext(context, user);
             const { config } = await configPromise;
-            prebuiltWorkspace = await this.incrementalPrebuildsService.findGoodBaseForIncrementalBuild(
+            prebuiltWorkspace = await this.incrementalWorkspaceService.findBaseForIncrementalWorkspace(
                 context,
                 config,
                 history,
                 user,
                 projectId,
+                false,
             );
         }
         if (!prebuiltWorkspace?.projectId) {
@@ -85,7 +86,6 @@ export class ContextService {
 
     /**
      * parseContextUrl without snapshot and prebuild checking
-     * @deprecated
      */
     public async parseContextUrl(user: User, contextUrl: string): Promise<WorkspaceContext> {
         let normalizedContextUrl = "";
@@ -105,6 +105,16 @@ export class ContextService {
                 error ? String(error) : `Cannot create workspace for URL: ${normalizedContextUrl}`,
             );
         }
+    }
+
+    public async parseContextUrlAsCloneUrl(user: User, contextUrl: string): Promise<string | undefined> {
+        const normalizedContextUrl = this.contextParser.normalizeContextURL(contextUrl);
+        const context = await this.contextParser.handle({}, user, normalizedContextUrl);
+        if (CommitContext.is(context)) {
+            return context.repository.cloneUrl;
+        }
+
+        return undefined;
     }
 
     public async parseContext(
@@ -149,7 +159,9 @@ export class ContextService {
                 user.id,
                 context.repository.cloneUrl,
                 options?.organizationId,
+                true,
             );
+            // todo(ft): solve for this case with collaborators who can't select projects directly
             if (projects.length > 1) {
                 throw new ApplicationError(ErrorCodes.BAD_REQUEST, "Multiple projects found for clone URL.");
             }

@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -53,7 +54,7 @@ import (
 const (
 	// stopWorkspaceNormallyGracePeriod is the grace period we use when stopping a pod with StopWorkspaceNormally policy
 	stopWorkspaceNormallyGracePeriod = 30 * time.Second
-	// stopWorkspaceImmediatelyGracePeriod is the grace period we use when stopping a pod as soon as possbile
+	// stopWorkspaceImmediatelyGracePeriod is the grace period we use when stopping a pod as soon as possible
 	stopWorkspaceImmediatelyGracePeriod = 1 * time.Second
 )
 
@@ -491,7 +492,6 @@ func (m *WorkspaceManagerServer) Subscribe(req *wsmanapi.SubscribeRequest, srv w
 
 // MarkActive records a workspace as being active which prevents it from timing out
 func (wsm *WorkspaceManagerServer) MarkActive(ctx context.Context, req *wsmanapi.MarkActiveRequest) (res *wsmanapi.MarkActiveResponse, err error) {
-	//nolint:ineffassign
 	span, ctx := tracing.FromContext(ctx, "MarkActive")
 	tracing.ApplyOWI(span, log.OWI("", "", req.Id))
 	defer tracing.FinishSpan(span, &err)
@@ -529,7 +529,7 @@ func (wsm *WorkspaceManagerServer) MarkActive(ctx context.Context, req *wsmanapi
 		log.WithError(err).WithFields(log.OWI("", "", workspaceID)).Warn("was unable to update status")
 	}
 
-	// We do however maintain the the "closed" flag as condition on the workspace. This flag should not change
+	// We do however maintain the "closed" flag as condition on the workspace. This flag should not change
 	// very often and provides a better UX if it persists across ws-manager restarts.
 	isMarkedClosed := ws.IsConditionTrue(workspacev1.WorkspaceConditionClosed)
 	if req.Closed && !isMarkedClosed {
@@ -591,13 +591,17 @@ func (wsm *WorkspaceManagerServer) SetTimeout(ctx context.Context, req *wsmanapi
 	return &wsmanapi.SetTimeoutResponse{}, nil
 }
 
-func (wsm *WorkspaceManagerServer) ControlPort(ctx context.Context, req *wsmanapi.ControlPortRequest) (*wsmanapi.ControlPortResponse, error) {
+func (wsm *WorkspaceManagerServer) ControlPort(ctx context.Context, req *wsmanapi.ControlPortRequest) (res *wsmanapi.ControlPortResponse, err error) {
+	span, ctx := tracing.FromContext(ctx, "ControlPort")
+	tracing.ApplyOWI(span, log.OWI("", "", req.Id))
+	defer tracing.FinishSpan(span, &err)
+
 	if req.Spec == nil {
 		return nil, status.Errorf(codes.InvalidArgument, "missing spec")
 	}
 
 	port := req.Spec.Port
-	err := wsm.modifyWorkspace(ctx, req.Id, false, func(ws *workspacev1.Workspace) error {
+	err = wsm.modifyWorkspace(ctx, req.Id, false, func(ws *workspacev1.Workspace) error {
 		n := 0
 		for _, x := range ws.Spec.Ports {
 			if x.Port != port {
@@ -763,9 +767,10 @@ func (wsm *WorkspaceManagerServer) UpdateSSHKey(ctx context.Context, req *wsmana
 	return &wsmanapi.UpdateSSHKeyResponse{}, err
 }
 
-func (wsm *WorkspaceManagerServer) DescribeCluster(ctx context.Context, req *wsmanapi.DescribeClusterRequest) (*wsmanapi.DescribeClusterResponse, error) {
-	span, _ := tracing.FromContext(ctx, "DescribeCluster")
-	defer tracing.FinishSpan(span, nil)
+func (wsm *WorkspaceManagerServer) DescribeCluster(ctx context.Context, req *wsmanapi.DescribeClusterRequest) (res *wsmanapi.DescribeClusterResponse, err error) {
+	//nolint:ineffassign
+	span, ctx := tracing.FromContext(ctx, "DescribeCluster")
+	defer tracing.FinishSpan(span, &err)
 
 	classes := make([]*wsmanapi.WorkspaceClass, 0, len(wsm.Config.WorkspaceClasses))
 	for id, class := range wsm.Config.WorkspaceClasses {
@@ -804,10 +809,17 @@ func (wsm *WorkspaceManagerServer) DescribeCluster(ctx context.Context, req *wsm
 
 // modifyWorkspace modifies a workspace object using the mod function. If the mod function returns a gRPC status error, that error
 // is returned directly. If mod returns a non-gRPC error it is turned into one.
-func (wsm *WorkspaceManagerServer) modifyWorkspace(ctx context.Context, id string, updateStatus bool, mod func(ws *workspacev1.Workspace) error) error {
-	err := retry.RetryOnConflict(retryParams, func() error {
+func (wsm *WorkspaceManagerServer) modifyWorkspace(ctx context.Context, id string, updateStatus bool, mod func(ws *workspacev1.Workspace) error) (err error) {
+	span, ctx := tracing.FromContext(ctx, "modifyWorkspace")
+	tracing.ApplyOWI(span, log.OWI("", "", id))
+	defer tracing.FinishSpan(span, &err)
+
+	err = retry.RetryOnConflict(retryParams, func() (err error) {
+		span, ctx := tracing.FromContext(ctx, "modifyWorkspaceRetryFn")
+		defer tracing.FinishSpan(span, &err)
+
 		var ws workspacev1.Workspace
-		err := wsm.Client.Get(ctx, types.NamespacedName{Namespace: wsm.Config.Namespace, Name: id}, &ws)
+		err = wsm.Client.Get(ctx, types.NamespacedName{Namespace: wsm.Config.Namespace, Name: id}, &ws)
 		if err != nil {
 			return err
 		}
@@ -1094,6 +1106,21 @@ func (wsm *WorkspaceManagerServer) extractWorkspaceStatus(ws *workspacev1.Worksp
 		})
 	}
 
+	var metrics *wsmanapi.WorkspaceMetadata_Metrics
+	if ws.Status.ImageInfo != nil {
+		metrics = &wsmanapi.WorkspaceMetadata_Metrics{
+			Image: &wsmanapi.WorkspaceMetadata_ImageInfo{
+				TotalSize:          ws.Status.ImageInfo.TotalSize,
+				WorkspaceImageSize: ws.Status.ImageInfo.WorkspaceImageSize,
+			},
+		}
+	}
+
+	var initializerMetrics *wsmanapi.InitializerMetrics
+	if ws.Status.InitializerMetrics != nil {
+		initializerMetrics = mapInitializerMetrics(ws.Status.InitializerMetrics)
+	}
+
 	res := &wsmanapi.WorkspaceStatus{
 		Id:            ws.Name,
 		StatusVersion: version,
@@ -1102,6 +1129,7 @@ func (wsm *WorkspaceManagerServer) extractWorkspaceStatus(ws *workspacev1.Worksp
 			MetaId:      ws.Spec.Ownership.WorkspaceID,
 			StartedAt:   timestamppb.New(ws.CreationTimestamp.Time),
 			Annotations: ws.Annotations,
+			Metrics:     metrics,
 		},
 		Spec: &wsmanapi.WorkspaceSpec{
 			Class:          ws.Spec.Class,
@@ -1135,10 +1163,71 @@ func (wsm *WorkspaceManagerServer) extractWorkspaceStatus(ws *workspacev1.Worksp
 			Admission:  admissionLevel,
 			OwnerToken: ws.Status.OwnerToken,
 		},
-		Repo: convertGitStatus(ws.Status.GitStatus),
+		Repo:               convertGitStatus(ws.Status.GitStatus),
+		InitializerMetrics: initializerMetrics,
 	}
 
 	return res
+}
+
+func mapInitializerMetrics(in *workspacev1.InitializerMetrics) *wsmanapi.InitializerMetrics {
+	result := &wsmanapi.InitializerMetrics{}
+	// Convert Git metrics
+	if in.Git != nil {
+		result.Git = &wsmanapi.InitializerMetric{
+			Duration: durationToProto(in.Git.Duration),
+			Size:     uint64(in.Git.Size),
+		}
+	}
+
+	// Convert FileDownload metrics
+	if in.FileDownload != nil {
+		result.FileDownload = &wsmanapi.InitializerMetric{
+			Duration: durationToProto(in.FileDownload.Duration),
+			Size:     uint64(in.FileDownload.Size),
+		}
+	}
+
+	// Convert Snapshot metrics
+	if in.Snapshot != nil {
+		result.Snapshot = &wsmanapi.InitializerMetric{
+			Duration: durationToProto(in.Snapshot.Duration),
+			Size:     uint64(in.Snapshot.Size),
+		}
+	}
+
+	// Convert Backup metrics
+	if in.Backup != nil {
+		result.Backup = &wsmanapi.InitializerMetric{
+			Duration: durationToProto(in.Backup.Duration),
+			Size:     uint64(in.Backup.Size),
+		}
+	}
+
+	// Convert Prebuild metrics
+	if in.Prebuild != nil {
+		result.Prebuild = &wsmanapi.InitializerMetric{
+			Duration: durationToProto(in.Prebuild.Duration),
+			Size:     uint64(in.Prebuild.Size),
+		}
+	}
+
+	// Convert Composite metrics
+	if in.Composite != nil {
+		result.Composite = &wsmanapi.InitializerMetric{
+			Duration: durationToProto(in.Composite.Duration),
+			Size:     uint64(in.Composite.Size),
+		}
+	}
+
+	return result
+}
+
+func durationToProto(d *metav1.Duration) *durationpb.Duration {
+	if d == nil {
+		return nil
+	}
+	return durationpb.New(d.Duration)
 }
 
 func getConditionMessageIfTrue(conds []metav1.Condition, tpe string) string {
@@ -1417,7 +1506,6 @@ func (subs *subscriptions) OnChange(ctx context.Context, status *wsmanapi.Worksp
 
 type workspaceMetrics struct {
 	totalStartsCounterVec *prometheus.CounterVec
-	workspaceActivityVec  *workspaceActivityVec
 }
 
 func newWorkspaceMetrics(namespace string, k8s client.Client) *workspaceMetrics {
@@ -1428,7 +1516,6 @@ func newWorkspaceMetrics(namespace string, k8s client.Client) *workspaceMetrics 
 			Name:      "workspace_starts_total",
 			Help:      "total number of workspaces started",
 		}, []string{"type", "class"}),
-		workspaceActivityVec: newWorkspaceActivityVec(namespace, k8s),
 	}
 }
 
@@ -1446,79 +1533,9 @@ func (m *workspaceMetrics) recordWorkspaceStart(ws *workspacev1.Workspace) {
 // Describe implements Collector. It will send exactly one Desc to the provided channel.
 func (m *workspaceMetrics) Describe(ch chan<- *prometheus.Desc) {
 	m.totalStartsCounterVec.Describe(ch)
-	m.workspaceActivityVec.Describe(ch)
 }
 
 // Collect implements Collector.
 func (m *workspaceMetrics) Collect(ch chan<- prometheus.Metric) {
 	m.totalStartsCounterVec.Collect(ch)
-	m.workspaceActivityVec.Collect(ch)
-}
-
-type workspaceActivityVec struct {
-	*prometheus.GaugeVec
-	name               string
-	workspaceNamespace string
-	k8s                client.Client
-}
-
-func newWorkspaceActivityVec(workspaceNamespace string, k8s client.Client) *workspaceActivityVec {
-	opts := prometheus.GaugeOpts{
-		Namespace: "gitpod",
-		Subsystem: "ws_manager_mk2",
-		Name:      "workspace_activity_total",
-		Help:      "total number of active workspaces",
-	}
-	return &workspaceActivityVec{
-		GaugeVec:           prometheus.NewGaugeVec(opts, []string{"active"}),
-		name:               prometheus.BuildFQName(opts.Namespace, opts.Subsystem, opts.Name),
-		workspaceNamespace: workspaceNamespace,
-		k8s:                k8s,
-	}
-}
-
-func (wav *workspaceActivityVec) Collect(ch chan<- prometheus.Metric) {
-	active, notActive, err := wav.getWorkspaceActivityCounts()
-	if err != nil {
-		log.WithError(err).Errorf("cannot determine active/inactive counts - %s will be inaccurate", wav.name)
-		return
-	}
-
-	activeGauge, err := wav.GetMetricWithLabelValues("true")
-	if err != nil {
-		log.WithError(err).Error("cannot get active gauge count - this is an internal configuration error and should not happen")
-		return
-	}
-
-	notActiveGauge, err := wav.GetMetricWithLabelValues("false")
-	if err != nil {
-		log.WithError(err).Error("cannot get not-active gauge count - this is an internal configuration error and should not happen")
-		return
-	}
-
-	activeGauge.Set(float64(active))
-	notActiveGauge.Set(float64(notActive))
-	wav.GaugeVec.Collect(ch)
-}
-
-func (wav *workspaceActivityVec) getWorkspaceActivityCounts() (active, notActive int, err error) {
-	var workspaces workspacev1.WorkspaceList
-	if err = wav.k8s.List(context.Background(), &workspaces, client.InNamespace(wav.workspaceNamespace)); err != nil {
-		return 0, 0, err
-	}
-
-	for _, ws := range workspaces.Items {
-		if ws.Spec.Type != workspacev1.WorkspaceTypeRegular {
-			continue
-		}
-
-		hasActivity := activity.Last(&ws) != nil
-		if hasActivity {
-			active++
-		} else {
-			notActive++
-		}
-	}
-
-	return
 }

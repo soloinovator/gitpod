@@ -14,7 +14,7 @@ type GitpodServerMethodType =
     | keyof Omit<GitpodServer, "dispose" | "setClient">
     | typeof accessCodeSyncStorage
     | typeof accessHeadlessLogs;
-type GroupKey = "default" | "startWorkspace" | "createWorkspace" | "phoneVerification" | "sendHeartBeat";
+type GroupKey = "default" | "startWorkspace" | "createWorkspace" | "phoneVerification" | "sendHeartBeat" | "getToken";
 type GroupsConfig = {
     [key: string]: {
         points: number;
@@ -57,7 +57,7 @@ const defaultFunctions: FunctionsConfig = {
     deleteOrgAuthProvider: { group: "default", points: 1 },
     getConfiguration: { group: "default", points: 1 },
     getGitpodTokenScopes: { group: "default", points: 1 },
-    getToken: { group: "default", points: 1 },
+    getToken: { group: "getToken", points: 1 },
     deleteAccount: { group: "default", points: 1 },
     getClientRegion: { group: "default", points: 1 },
     getWorkspaces: { group: "default", points: 1 },
@@ -110,6 +110,7 @@ const defaultFunctions: FunctionsConfig = {
     deleteTeam: { group: "default", points: 1 },
     getOrgSettings: { group: "default", points: 1 },
     updateOrgSettings: { group: "default", points: 1 },
+    getOrgWorkspaceClasses: { group: "default", points: 1 },
     getDefaultWorkspaceImage: { group: "default", points: 1 },
     getProviderRepositoriesForUser: { group: "default", points: 1 },
     createProject: { group: "default", points: 1 },
@@ -132,6 +133,7 @@ const defaultFunctions: FunctionsConfig = {
     getSnapshots: { group: "default", points: 1 },
     guessGitTokenScopes: { group: "default", points: 1 },
     getUsageBalance: { group: "default", points: 1 },
+    isCustomerBillingAddressInvalid: { group: "default", points: 1 },
     resolveContext: { group: "default", points: 1 },
 
     adminGetUsers: { group: "default", points: 1 },
@@ -185,6 +187,7 @@ const defaultFunctions: FunctionsConfig = {
     trackLocation: { group: "default", points: 1 },
     identifyUser: { group: "default", points: 1 },
     getIDEOptions: { group: "default", points: 1 },
+    getIDEVersions: { group: "default", points: 1 },
     getCostCenter: { group: "default", points: 1 },
     setUsageLimit: { group: "default", points: 1 },
     getSupportedWorkspaceClasses: { group: "default", points: 1 },
@@ -202,6 +205,10 @@ function getConfig(config: RateLimiterConfig): RateLimiterConfig {
     const defaultGroups: GroupsConfig = {
         default: {
             points: 200, // 200 calls per user, per connection, per minute
+            durationsSec: 60,
+        },
+        getToken: {
+            points: 500, // 500 calls per user, per connection, per minute
             durationsSec: 60,
         },
         startWorkspace: {

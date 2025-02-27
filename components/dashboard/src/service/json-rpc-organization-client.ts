@@ -4,7 +4,7 @@
  * See License.AGPL.txt in the project root for license information.
  */
 
-import { PartialMessage } from "@bufbuild/protobuf";
+import { PartialMessage, PlainMessage } from "@bufbuild/protobuf";
 import { CallOptions, PromiseClient } from "@connectrpc/connect";
 import { OrganizationService } from "@gitpod/public-api/lib/gitpod/v1/organization_connect";
 import {
@@ -24,8 +24,11 @@ import {
     JoinOrganizationResponse,
     ListOrganizationMembersRequest,
     ListOrganizationMembersResponse,
+    ListOrganizationWorkspaceClassesRequest,
+    ListOrganizationWorkspaceClassesResponse,
     ListOrganizationsRequest,
     ListOrganizationsResponse,
+    OrganizationSettings,
     ResetOrganizationInvitationRequest,
     ResetOrganizationInvitationResponse,
     UpdateOrganizationMemberRequest,
@@ -50,6 +53,19 @@ export class JsonRpcOrganizationClient implements PromiseClient<typeof Organizat
         const result = await getGitpodService().server.createTeam(request.name);
         return new CreateOrganizationResponse({
             organization: converter.toOrganization(result),
+        });
+    }
+
+    async listOrganizationWorkspaceClasses(
+        request: PartialMessage<ListOrganizationWorkspaceClassesRequest>,
+        options?: CallOptions | undefined,
+    ): Promise<ListOrganizationWorkspaceClassesResponse> {
+        if (!request.organizationId) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "organizationId is required");
+        }
+        const list = await getGitpodService().server.getOrgWorkspaceClasses(request.organizationId);
+        return new ListOrganizationWorkspaceClassesResponse({
+            workspaceClasses: list.map((e) => converter.toWorkspaceClass(e)),
         });
     }
 
@@ -211,10 +227,62 @@ export class JsonRpcOrganizationClient implements PromiseClient<typeof Organizat
         if (!request.organizationId) {
             throw new ApplicationError(ErrorCodes.BAD_REQUEST, "organizationId is required");
         }
-        await getGitpodService().server.updateOrgSettings(request.organizationId, {
-            workspaceSharingDisabled: request?.workspaceSharingDisabled,
-            defaultWorkspaceImage: request?.defaultWorkspaceImage,
-        });
+
+        if (
+            request.restrictedEditorNames &&
+            request.restrictedEditorNames.length > 0 &&
+            !request.updateRestrictedEditorNames
+        ) {
+            throw new ApplicationError(
+                ErrorCodes.BAD_REQUEST,
+                "updateRestrictedEditorNames is required to be true to update restrictedEditorNames",
+            );
+        }
+
+        if (
+            request.allowedWorkspaceClasses &&
+            request.allowedWorkspaceClasses.length > 0 &&
+            !request.updateAllowedWorkspaceClasses
+        ) {
+            throw new ApplicationError(
+                ErrorCodes.BAD_REQUEST,
+                "updateAllowedWorkspaceClasses is required to be true to update allowedWorkspaceClasses",
+            );
+        }
+
+        if (
+            request.pinnedEditorVersions &&
+            Object.keys(request.pinnedEditorVersions).length > 0 &&
+            !request.updatePinnedEditorVersions
+        ) {
+            throw new ApplicationError(
+                ErrorCodes.BAD_REQUEST,
+                "updatePinnedEditorVersions is required to be true to update pinnedEditorVersions",
+            );
+        }
+
+        if (request.roleRestrictions && request.roleRestrictions.length > 0 && !request.updateRoleRestrictions) {
+            throw new ApplicationError(
+                ErrorCodes.BAD_REQUEST,
+                "updateRoleRestrictions is required to be true when updating roleRestrictions",
+            );
+        }
+        if (
+            request.onboardingSettings?.recommendedRepositories &&
+            request.onboardingSettings.recommendedRepositories.length > 0 &&
+            !request.onboardingSettings.updateRecommendedRepositories
+        ) {
+            throw new ApplicationError(
+                ErrorCodes.BAD_REQUEST,
+                "recommendedRepositories can only be set when updateRecommendedRepositories is true",
+            );
+        }
+
+        // gpl: We accept the little bit of uncertainty here because a) the partial/not-partial mismatch is only about
+        // technical/private fields and b) this path should not be exercised anymore anyway.
+        const update = converter.fromOrganizationSettings(request as PlainMessage<OrganizationSettings>);
+
+        await getGitpodService().server.updateOrgSettings(request.organizationId, update);
         return new UpdateOrganizationSettingsResponse();
     }
 }

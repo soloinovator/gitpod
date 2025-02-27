@@ -41,16 +41,13 @@ describe("SSHKeyService", async () => {
 
     beforeEach(async () => {
         container = createTestContainer();
-        Experiments.configureTestingClient({
-            centralizedPermissions: true,
-        });
+        Experiments.configureTestingClient({});
 
         const orgService = container.get<OrganizationService>(OrganizationService);
         org = await orgService.createOrganization(BUILTIN_INSTLLATION_ADMIN_USER_ID, "myOrg");
-        const invite = await orgService.getOrCreateInvite(BUILTIN_INSTLLATION_ADMIN_USER_ID, org.id);
 
         const userService = container.get<UserService>(UserService);
-        member = await userService.createUser({
+        member = await orgService.createOrgOwnedUser({
             organizationId: org.id,
             identity: {
                 authId: "foo",
@@ -59,7 +56,6 @@ describe("SSHKeyService", async () => {
                 primaryEmail: "yolo@yolo.com",
             },
         });
-        await orgService.joinOrganization(member.id, invite.id);
         stranger = await userService.createUser({
             identity: {
                 authId: "foo2",
@@ -74,7 +70,7 @@ describe("SSHKeyService", async () => {
     afterEach(async () => {
         // Clean-up database
         await resetDB(container.get(TypeORM));
-        container.unbindAll();
+        await container.unbindAllAsync();
     });
 
     it("should add ssh key", async () => {

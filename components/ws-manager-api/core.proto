@@ -6,6 +6,7 @@ option go_package = "github.com/gitpod-io/gitpod/ws-manager/api";
 
 import "content-service-api/initializer.proto";
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
 
 service WorkspaceManager {
     // getWorkspaces produces a list of running workspaces and their status
@@ -97,7 +98,7 @@ message StartWorkspaceRequest {
     // see https://developers.google.com/protocol-buffers/docs/proto3#reserved reg. gRPC field deprecation
     reserved 5;
 
-    // Type denots the kind of workspace we ought to start
+    // Type denotes the kind of workspace we ought to start
     WorkspaceType type = 6;
 }
 
@@ -290,9 +291,9 @@ message WorkspaceStatus {
     string id = 1;
 
     // version of the status update. Workspace instances themselves are unversioned,
-    // but their statuus has different versions.
+    // but their status has different versions.
     // The value of this field has no semantic meaning (e.g. don't interpret it as
-    // as a timestemp), but it can be used to impose a partial order.
+    // as a timestamp), but it can be used to impose a partial order.
     // If a.status_version < b.status_version then a was the status before b.
     uint64 status_version = 10;
 
@@ -321,6 +322,9 @@ message WorkspaceStatus {
 
     // auth provides authentication information about the workspace. This info is primarily used by ws-proxy.
     WorkspaceAuthentication auth = 9;
+
+    // metrics contains metrics about the workspace
+    InitializerMetrics initializer_metrics = 11;
 }
 
 // IDEImage configures the IDE images a workspace will use
@@ -510,6 +514,17 @@ enum WorkspacePhase {
 
 // WorkspaceMetadata is data associated with a workspace that's required for other parts of the system to function
 message WorkspaceMetadata {
+    message ImageInfo {
+        // TotalSize is the total size of the image
+        int64 total_size = 1;
+
+        // WorkspaceImageSize is the size of the workspace image
+        int64 workspace_image_size = 2;
+    }
+    message Metrics {
+        ImageInfo image = 1;
+    }
+
     // owner is the ID of the Gitpod user to whom we'll bill this workspace and who we consider responsible for its content
     string owner = 1;
 
@@ -528,10 +543,13 @@ message WorkspaceMetadata {
 
     // project the workspace belongs to, if the workspace is not associated with a project, this property will be empty
     optional string project = 6;
+
+    // metrics contains metrics about the workspace
+    Metrics metrics = 7;
 }
 
 // WorkspaceRuntimeInfo details the workspace's runtime, e.g. executing system, node other information
-// about the environment the workspace runs in. This information serves a diangostic purpose only and
+// about the environment the workspace runs in. This information serves a diagnostic purpose only and
 // should not be directly acted upon.
 message WorkspaceRuntimeInfo {
     // node_name is the name of the node the workspace runs on
@@ -742,4 +760,34 @@ message WorkspaceClass {
 
     // The cost of running a workspace of this class per minute expressed in credits
     float credits_per_minute = 4;
+}
+
+// Add these new message definitions
+message InitializerMetric {
+    // duration in nanoseconds (standard protobuf duration)
+    google.protobuf.Duration duration = 1;
+
+    // size in bytes
+    uint64 size = 2;
+}
+
+message InitializerMetrics {
+	// git contains metrics for the git initializer step
+    InitializerMetric git = 1;
+
+	// file_download contains metrics for the file download initializer step
+    InitializerMetric file_download = 2;
+
+	// snapshot contains metrics for the snapshot initializer step
+	// This used for workspaces started from snapshots.
+    InitializerMetric snapshot = 3;
+
+	// backup contains metrics for the backup initializer step
+    InitializerMetric backup = 4;
+
+	// prebuild contains metrics for the prebuild initializer step
+    InitializerMetric prebuild = 5;
+
+	// composite contains metrics for the composite initializer step
+    InitializerMetric composite = 6;
 }

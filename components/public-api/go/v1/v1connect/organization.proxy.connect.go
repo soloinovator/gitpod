@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Gitpod GmbH. All rights reserved.
+// Copyright (c) 2025 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
 // See License.AGPL.txt in the project root for license information.
 
@@ -141,6 +141,16 @@ func (s *ProxyOrganizationServiceHandler) GetOrganizationSettings(ctx context.Co
 
 func (s *ProxyOrganizationServiceHandler) UpdateOrganizationSettings(ctx context.Context, req *connect_go.Request[v1.UpdateOrganizationSettingsRequest]) (*connect_go.Response[v1.UpdateOrganizationSettingsResponse], error) {
 	resp, err := s.Client.UpdateOrganizationSettings(ctx, req.Msg)
+	if err != nil {
+		// TODO(milan): Convert to correct status code
+		return nil, err
+	}
+
+	return connect_go.NewResponse(resp), nil
+}
+
+func (s *ProxyOrganizationServiceHandler) ListOrganizationWorkspaceClasses(ctx context.Context, req *connect_go.Request[v1.ListOrganizationWorkspaceClassesRequest]) (*connect_go.Response[v1.ListOrganizationWorkspaceClassesResponse], error) {
+	resp, err := s.Client.ListOrganizationWorkspaceClasses(ctx, req.Msg)
 	if err != nil {
 		// TODO(milan): Convert to correct status code
 		return nil, err

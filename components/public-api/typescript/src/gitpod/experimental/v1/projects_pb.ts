@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2023 Gitpod GmbH. All rights reserved.
+ * Copyright (c) 2025 Gitpod GmbH. All rights reserved.
  * Licensed under the GNU Affero General Public License (AGPL).
  * See License.AGPL.txt in the project root for license information.
  */
@@ -215,6 +215,16 @@ export class WorkspaceSettings extends Message<WorkspaceSettings> {
    */
   workspaceClass?: WorkspaceClassSettings;
 
+  /**
+   * @generated from field: repeated string restricted_workspace_classes = 3;
+   */
+  restrictedWorkspaceClasses: string[] = [];
+
+  /**
+   * @generated from field: repeated string restricted_editor_names = 4;
+   */
+  restrictedEditorNames: string[] = [];
+
   constructor(data?: PartialMessage<WorkspaceSettings>) {
     super();
     proto3.util.initPartial(data, this);
@@ -225,6 +235,8 @@ export class WorkspaceSettings extends Message<WorkspaceSettings> {
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
     { no: 1, name: "enable_persistent_volume_claim", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
     { no: 2, name: "workspace_class", kind: "message", T: WorkspaceClassSettings },
+    { no: 3, name: "restricted_workspace_classes", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
+    { no: 4, name: "restricted_editor_names", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): WorkspaceSettings {

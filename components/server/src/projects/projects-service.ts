@@ -5,7 +5,7 @@
  */
 
 import { inject, injectable } from "inversify";
-import { DBWithTracing, ProjectDB, TracedWorkspaceDB, WorkspaceDB } from "@gitpod/gitpod-db/lib";
+import { DBWithTracing, ProjectDB, TracedWorkspaceDB, WebhookEventDB, WorkspaceDB } from "@gitpod/gitpod-db/lib";
 import {
     Branch,
     PrebuildWithStatus,
@@ -13,6 +13,8 @@ import {
     FindPrebuildsParams,
     Project,
     User,
+    CommitContext,
+    WebhookEvent,
 } from "@gitpod/gitpod-protocol";
 import { HostContextProvider } from "../auth/host-context-provider";
 import { RepoURL } from "../repohost";
@@ -30,8 +32,18 @@ import { Authorizer, SYSTEM_USER, SYSTEM_USER_ID } from "../authorization/author
 import { TransactionalContext } from "@gitpod/gitpod-db/lib/typeorm/transactional-db-impl";
 import { daysBefore, isDateSmaller } from "@gitpod/gitpod-protocol/lib/util/timeutil";
 import deepmerge from "deepmerge";
-import { ScmService } from "../scm/scm-service";
 import { runWithSubjectId } from "../util/request-context";
+import { InstallationService } from "../auth/installation-service";
+import { IDEService } from "../ide-service";
+import type { PrebuildManager } from "../prebuilds/prebuild-manager";
+import { TraceContext } from "@gitpod/gitpod-protocol/lib/util/tracing";
+import { ContextParser } from "../workspace/context-parser-service";
+import { UnauthorizedError } from "../errors";
+import { LazyOrganizationService } from "../billing/entitlement-service-ubp";
+
+// to resolve circular dependency issues
+export const LazyPrebuildManager = Symbol("LazyPrebuildManager");
+export type LazyPrebuildManager = () => PrebuildManager;
 
 const MAX_PROJECT_NAME_LENGTH = 100;
 
@@ -43,11 +55,22 @@ export class ProjectsService {
         @inject(HostContextProvider) private readonly hostContextProvider: HostContextProvider,
         @inject(IAnalyticsWriter) private readonly analytics: IAnalyticsWriter,
         @inject(Authorizer) private readonly auth: Authorizer,
-        @inject(ScmService) private readonly scmService: ScmService,
+        @inject(IDEService) private readonly ideService: IDEService,
+        @inject(LazyPrebuildManager) private readonly prebuildManager: LazyPrebuildManager,
+        @inject(ContextParser) private readonly contextParser: ContextParser,
+        @inject(WebhookEventDB) private readonly webhookEventDb: WebhookEventDB,
+        @inject(LazyOrganizationService) private readonly organizationService: LazyOrganizationService,
+        @inject(InstallationService) private readonly installationService: InstallationService,
     ) {}
 
-    async getProject(userId: string, projectId: string): Promise<Project> {
-        await this.auth.checkPermissionOnProject(userId, "read_info", projectId);
+    /**
+     * Returns a project by its ID.
+     * @param skipPermissionCheck useful either when the caller already checked permissions or when we need to do something purely server-side (e.g. looking up a project when starting a workspace by a collaborator)
+     */
+    async getProject(userId: string, projectId: string, skipPermissionCheck?: boolean): Promise<Project> {
+        if (!skipPermissionCheck) {
+            await this.auth.checkPermissionOnProject(userId, "read_info", projectId);
+        }
         const project = await this.projectDB.findProjectById(projectId);
         if (!project) {
             throw new ApplicationError(ErrorCodes.NOT_FOUND, `Project ${projectId} not found.`);
@@ -55,9 +78,9 @@ export class ProjectsService {
         return this.migratePrebuildSettingsOnDemand(project);
     }
 
-    async getProjects(userId: string, orgId: string): Promise<Project[]> {
+    async getProjects(userId: string, orgId: string, paginationOptions?: { limit?: number }): Promise<Project[]> {
         await this.auth.checkPermissionOnOrganization(userId, "read_info", orgId);
-        const projects = await this.projectDB.findProjects(orgId);
+        const projects = await this.projectDB.findProjects(orgId, paginationOptions?.limit);
         const filteredProjects = await this.filterByReadAccess(userId, projects);
         return Promise.all(filteredProjects.map((p) => this.migratePrebuildSettingsOnDemand(p)));
     }
@@ -116,11 +139,18 @@ export class ProjectsService {
         return filteredProjects;
     }
 
-    async findProjectsByCloneUrl(userId: string, cloneUrl: string, organizationId?: string): Promise<Project[]> {
+    async findProjectsByCloneUrl(
+        userId: string,
+        cloneUrl: string,
+        organizationId?: string,
+        skipPermissionCheck?: boolean,
+    ): Promise<Project[]> {
         const projects = await this.projectDB.findProjectsByCloneUrl(cloneUrl, organizationId);
         const result: Project[] = [];
         for (const project of projects) {
-            if (await this.auth.hasPermissionOnProject(userId, "read_info", project.id)) {
+            const hasPermission =
+                skipPermissionCheck || (await this.auth.hasPermissionOnProject(userId, "read_info", project.id));
+            if (hasPermission) {
                 result.push(project);
             }
         }
@@ -208,7 +238,7 @@ export class ProjectsService {
     }
 
     async createProject(
-        { name, slug, cloneUrl, teamId, appInstallationId }: CreateProjectParams,
+        { name, cloneUrl, teamId, appInstallationId }: CreateProjectParams,
         installer: User,
         projectSettingsDefaults: ProjectSettings = { prebuilds: Project.PREBUILD_SETTINGS_DEFAULTS },
     ): Promise<Project> {
@@ -241,14 +271,14 @@ export class ProjectsService {
         if (!hostContext || !hostContext.services) {
             throw new ApplicationError(
                 ErrorCodes.BAD_REQUEST,
-                "No GIT provider has been configured for the provided repository.",
+                "No Git provider has been configured for the provided repository.",
             );
         }
         const repoProvider = hostContext.services.repositoryProvider;
         if (!repoProvider) {
             throw new ApplicationError(
                 ErrorCodes.BAD_REQUEST,
-                "No GIT provider has been configured for the provided repository.",
+                "No Git provider has been configured for the provided repository.",
             );
         }
         const canRead = await repoProvider.hasReadAccess(installer, parsedUrl.owner, parsedUrl.repo);
@@ -305,6 +335,8 @@ export class ProjectsService {
     async deleteProject(userId: string, projectId: string, transactionCtx?: TransactionalContext): Promise<void> {
         await this.auth.checkPermissionOnProject(userId, "delete", projectId);
 
+        const organizationService = this.organizationService();
+
         let orgId: string | undefined = undefined;
         try {
             await this.projectDB.transaction(transactionCtx, async (db) => {
@@ -314,6 +346,14 @@ export class ProjectsService {
                 }
                 orgId = project.teamId;
                 await db.markDeleted(projectId);
+
+                // delete env vars
+                const envVars = await db.getProjectEnvironmentVariables(projectId);
+                for (const envVar of envVars) {
+                    await db.deleteProjectEnvironmentVariable(envVar.id);
+                }
+
+                await organizationService.onProjectDeletion(userId, orgId, projectId);
 
                 await this.auth.removeProjectFromOrg(userId, orgId, projectId);
             });
@@ -346,13 +386,8 @@ export class ProjectsService {
         const result: PrebuildWithStatus[] = [];
 
         if (prebuildId) {
-            const pbws = await this.workspaceDb.trace({}).findPrebuiltWorkspaceById(prebuildId);
-            const info = (await this.workspaceDb.trace({}).findPrebuildInfos([prebuildId]))[0];
-            if (info && pbws) {
-                const r: PrebuildWithStatus = { info, status: pbws.state };
-                if (pbws.error) {
-                    r.error = pbws.error;
-                }
+            const r = await this.prebuildManager().getPrebuild({}, userId, prebuildId);
+            if (r) {
                 result.push(r);
             }
         } else {
@@ -361,20 +396,15 @@ export class ProjectsService {
                 limit = 1;
             }
             const branch = params.branch;
-            const prebuilds = await this.workspaceDb
-                .trace({})
-                .findPrebuiltWorkspacesByProject(project.id, branch, limit);
-            const infos = await this.workspaceDb.trace({}).findPrebuildInfos([...prebuilds.map((p) => p.id)]);
-            result.push(
-                ...infos.map((info) => {
-                    const p = prebuilds.find((p) => p.id === info.id)!;
-                    const r: PrebuildWithStatus = { info, status: p.state };
-                    if (p.error) {
-                        r.error = p.error;
-                    }
-                    return r;
-                }),
+            const prebuilds = await this.prebuildManager().listPrebuilds(
+                {},
+                userId,
+                project.teamId,
+                { limit, offset: 0 },
+                { configuration: { id: project.id, branch } },
+                { field: "creationTime", order: "DESC" },
             );
+            result.push(...prebuilds);
         }
         return result;
     }
@@ -400,34 +430,65 @@ export class ProjectsService {
             throw new ApplicationError(ErrorCodes.NOT_FOUND, `Project ${partialProject.id} not found.`);
         }
 
-        if (!partialProject.settings?.prebuilds && !partialProject.settings?.workspaceClasses) {
-            // No nested settings update, just update the project partially
-            return this.projectDB.updateProject(partialProject);
+        // In case we are altering the "enableDockerdAuthentication": require org write_settings permission, so users
+        // can't inadvertently share credentials an owner configured
+        if (
+            partialProject?.settings?.enableDockerdAuthentication !==
+                existingProject.settings?.enableDockerdAuthentication &&
+            partialProject?.settings?.enableDockerdAuthentication
+        ) {
+            await this.auth.checkPermissionOnOrganization(user.id, "write_settings", existingProject.teamId);
         }
 
-        const update = deepmerge(existingProject, partialProject);
+        // Merge settings so that clients don't need to pass previous value all the time
+        // (not update setting field if undefined)
+        if (partialProject.settings) {
+            const toBeMerged: ProjectSettings = existingProject.settings ?? {};
+            if (partialProject.settings.restrictedWorkspaceClasses) {
+                // deepmerge will try append array, so once data is defined, ignore previous value
+                toBeMerged.restrictedWorkspaceClasses = undefined;
+            }
+            if (partialProject.settings.restrictedEditorNames) {
+                // deepmerge will try append array, so once data is defined, ignore previous value
+                toBeMerged.restrictedEditorNames = undefined;
+            }
+            partialProject.settings = deepmerge(toBeMerged, partialProject.settings);
+            await this.checkProjectSettings(user.id, partialProject.settings);
+        }
+        if (partialProject?.settings?.prebuilds?.enable) {
+            const enablePrebuildsPrev = !!existingProject.settings?.prebuilds?.enable;
+            if (!enablePrebuildsPrev) {
+                // new default
+                partialProject.settings.prebuilds.triggerStrategy = "activity-based";
+            }
+        }
 
-        await this.handleEnablePrebuild(user, update);
-        return this.projectDB.updateProject(update);
+        return this.projectDB.updateProject(partialProject);
     }
 
-    private async handleEnablePrebuild(user: User, partialProject: PartialProject): Promise<void> {
-        const enablePrebuildsNew = partialProject?.settings?.prebuilds?.enable;
-        if (typeof enablePrebuildsNew === "boolean") {
-            const project = await this.projectDB.findProjectById(partialProject.id);
-            if (!project) {
-                return;
+    private async checkProjectSettings(userId: string, settings?: PartialProject["settings"]) {
+        if (!settings) {
+            return;
+        }
+        if (settings.restrictedWorkspaceClasses) {
+            const classList = settings.restrictedWorkspaceClasses.filter((cls) => !!cls) as string[];
+            if (classList.length > 0) {
+                // We don't check organization-level workspace classes since the field `restrictedWorkspaceClasses` in repository-level is a NOT ALLOW LIST
+                const allClasses = await this.installationService.getInstallationWorkspaceClasses(userId);
+                const notAllowedList = classList.filter((cls) => !allClasses.find((i) => i.id === cls));
+                if (notAllowedList.length > 0) {
+                    throw new ApplicationError(
+                        ErrorCodes.BAD_REQUEST,
+                        `Workspace classes ${notAllowedList.join(", ")} not allowed in installation`,
+                    );
+                }
             }
-            const enablePrebuildsPrev = !!project.settings?.prebuilds?.enable;
-            const installWebhook = enablePrebuildsNew && !enablePrebuildsPrev;
-            const uninstallWebhook = !enablePrebuildsNew && enablePrebuildsPrev;
-            if (installWebhook) {
-                await this.scmService.installWebhookForPrebuilds(project, user);
-            }
-            if (uninstallWebhook) {
-                // TODO
-                // await this.scmService.uninstallWebhookForPrebuilds(project, user);
-            }
+            settings.restrictedWorkspaceClasses = classList;
+        }
+        if (settings.restrictedEditorNames) {
+            const options = settings.restrictedEditorNames.filter((e) => !!e) as string[];
+            await this.ideService.checkEditorsAllowed(userId, options);
+            settings.restrictedEditorNames = options;
         }
     }
 
@@ -511,6 +572,62 @@ export class ProjectsService {
             });
             return project;
         }
+    }
+
+    /**
+     * getRecentWebhookEvent checks if the webhook integration is active for the given user and project by querying the webhook event database and seeing if for the latest commit on the repository there exists a webhook event. Additionally, if the necessary SCM permissions are given, the latest commit check is skipped and the most recent event is returned.
+     */
+    public async getRecentWebhookEvent(
+        ctx: TraceContext,
+        user: User,
+        project: Project,
+        maxAge?: number,
+    ): Promise<WebhookEvent | undefined> {
+        const context = (await this.contextParser.handle(ctx, user, project.cloneUrl)) as CommitContext;
+
+        // We fetch the most recent 50 events so to maximalize the propability
+        // of hitting a commit on the default branch and not just one on some
+        // separate feature branch.
+        const events = await this.webhookEventDb.findByCloneUrl(project.cloneUrl, 50);
+        const hostContext = this.hostContextProvider.get(context.repository.host);
+        const repoService = hostContext?.services?.repositoryService;
+        if (repoService) {
+            try {
+                const webhookEnabled = await repoService.isGitpodWebhookEnabled(user, project.cloneUrl);
+                return webhookEnabled
+                    ? events[0] ?? {
+                          commit: "n/a",
+                          creationTime: "",
+                          id: "initial_data",
+                          type: "initial_data",
+                          rawEvent: "{}",
+                          status: "processed",
+                      }
+                    : undefined;
+            } catch (error) {
+                if (!UnauthorizedError.is(error) && error.message !== "unsupported") {
+                    throw error;
+                }
+            }
+            1;
+        }
+
+        const matchingEvent = events.find((event) => {
+            if (maxAge && Date.now() - new Date(event.creationTime).getTime() > maxAge) {
+                return false;
+            }
+
+            // If we know when the source repository was last pushed to, we can figure out if we received the push event after that
+            if (context.repository.pushedAt && new Date(event.creationTime) >= new Date(context.repository.pushedAt)) {
+                return true;
+            }
+
+            // If we know the commit hash, we can check if latest commit in the event matches the one we know.
+            // We do this check second, because pushing to the non-default branch might throw this off.
+            return context.revision === event.commit;
+        });
+
+        return matchingEvent;
     }
 }
 

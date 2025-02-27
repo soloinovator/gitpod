@@ -6,6 +6,7 @@ import "gitpod/experimental/v1/pagination.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/gitpod-io/gitpod/components/public-api/go/experimental/v1";
+option java_package = "io.gitpod.publicapi.experimental.v1";
 
 message Project {
   // ID is the unique identifier for the project.
@@ -57,6 +58,8 @@ message PrebuildSettings {
 message WorkspaceSettings {
   bool enable_persistent_volume_claim = 1;
   WorkspaceClassSettings workspace_class = 2;
+  repeated string restricted_workspace_classes = 3;
+  repeated string restricted_editor_names = 4;
 }
 
 message WorkspaceClassSettings {

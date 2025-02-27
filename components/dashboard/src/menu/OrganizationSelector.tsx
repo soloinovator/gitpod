@@ -11,27 +11,32 @@ import { useCurrentUser } from "../user-context";
 import { useCurrentOrg, useOrganizations } from "../data/organizations/orgs-query";
 import { useLocation } from "react-router";
 import { useOrgBillingMode } from "../data/billing-mode/org-billing-mode-query";
+import { useIsOwner, useListOrganizationMembers, useHasRolePermission } from "../data/organizations/members-query";
+import { isAllowedToCreateOrganization } from "@gitpod/public-api-common/lib/user-utils";
+import { OrganizationRole } from "@gitpod/public-api/lib/gitpod/v1/organization_pb";
 import { useFeatureFlag } from "../data/featureflag-query";
-import { useIsOwner, useListOrganizationMembers } from "../data/organizations/members-query";
-import { isOrganizationOwned } from "@gitpod/public-api-common/lib/user-utils";
+import { PlusIcon } from "lucide-react";
+import { useInstallationConfiguration } from "../data/installation/installation-config-query";
 
 export default function OrganizationSelector() {
     const user = useCurrentUser();
     const orgs = useOrganizations();
     const currentOrg = useCurrentOrg();
-    const members = useListOrganizationMembers().data || [];
-    const owner = useIsOwner();
+    const members = useListOrganizationMembers().data ?? [];
+    const isOwner = useIsOwner();
+    const hasMemberPermission = useHasRolePermission(OrganizationRole.MEMBER);
     const { data: billingMode } = useOrgBillingMode();
     const getOrgURL = useGetOrgURL();
-    const repoConfigListAndDetail = useFeatureFlag("repoConfigListAndDetail");
-    const showRepoConfigMenuItem = useFeatureFlag("showRepoConfigMenuItem");
+    const { data: installationConfig } = useInstallationConfiguration();
+    const isDedicated = !!installationConfig?.isDedicatedInstallation;
+    const isMultiOrgEnabled = useFeatureFlag("enable_multi_org");
 
     // we should have an API to ask for permissions, until then we duplicate the logic here
-    const canCreateOrgs = user && !isOrganizationOwned(user);
+    const canCreateOrgs = user && isAllowedToCreateOrganization(user, isDedicated, isMultiOrgEnabled);
 
     const userFullName = user?.name || "...";
 
-    let activeOrgEntry = !currentOrg.data
+    const activeOrgEntry = !currentOrg.data
         ? {
               title: userFullName,
               customContent: <CurrentOrgEntry title={userFullName} subtitle="Personal Account" />,
@@ -44,7 +49,7 @@ export default function OrganizationSelector() {
               customContent: (
                   <CurrentOrgEntry
                       title={currentOrg.data.name}
-                      subtitle={`${members.length} member${members.length === 1 ? "" : "s"}`}
+                      subtitle={hasMemberPermission ? `${members.length} member${members.length === 1 ? "" : "s"}` : ""}
                   />
               ),
               active: false,
@@ -56,50 +61,73 @@ export default function OrganizationSelector() {
 
     // Show members if we have an org selected
     if (currentOrg.data) {
-        // Check both flags as one just controls if the menu item is present, the other if the page is accessible
-        if (repoConfigListAndDetail && showRepoConfigMenuItem) {
+        // collaborator can't access projects, members, usage and billing
+        if (hasMemberPermission) {
             linkEntries.push({
-                title: "Repositories",
-                customContent: <LinkEntry>Repositories</LinkEntry>,
+                title: "Prebuilds",
+                customContent: <LinkEntry>Prebuilds</LinkEntry>,
+                active: false,
+                separator: false,
+                link: "/prebuilds",
+            });
+            linkEntries.push({
+                title: "Members",
+                customContent: <LinkEntry>Members</LinkEntry>,
+                active: false,
+                separator: true,
+                link: "/members",
+            });
+            if (isDedicated) {
+                if (isOwner) {
+                    linkEntries.push({
+                        title: "Insights",
+                        customContent: <LinkEntry>Insights</LinkEntry>,
+                        active: false,
+                        separator: false,
+                        link: "/insights",
+                    });
+                }
+            } else {
+                linkEntries.push({
+                    title: "Usage",
+                    customContent: <LinkEntry>Usage</LinkEntry>,
+                    active: false,
+                    separator: false,
+                    link: "/usage",
+                });
+            }
+            // Show billing if user is an owner of current org
+            if (isOwner) {
+                if (billingMode?.mode === "usage-based") {
+                    linkEntries.push({
+                        title: "Billing",
+                        customContent: <LinkEntry>Billing</LinkEntry>,
+                        active: false,
+                        separator: false,
+                        link: "/billing",
+                    });
+                }
+            }
+
+            linkEntries.push({
+                title: "Repository Settings",
+                customContent: <LinkEntry>Repository Settings</LinkEntry>,
                 active: false,
                 separator: false,
                 link: "/repositories",
             });
+
+            // Org settings is available for all members, but only owner can change them
+            // collaborator can read org setting via API so that other feature like restrict org workspace classes could work
+            // we only hide the menu from dashboard
+            linkEntries.push({
+                title: "Organization Settings",
+                customContent: <LinkEntry>Organization Settings</LinkEntry>,
+                active: false,
+                separator: false,
+                link: "/settings",
+            });
         }
-        linkEntries.push({
-            title: "Members",
-            customContent: <LinkEntry>Members</LinkEntry>,
-            active: false,
-            separator: true,
-            link: "/members",
-        });
-        linkEntries.push({
-            title: "Usage",
-            customContent: <LinkEntry>Usage</LinkEntry>,
-            active: false,
-            separator: false,
-            link: "/usage",
-        });
-        // Show billing if user is an owner of current org
-        if (owner) {
-            if (billingMode?.mode === "usage-based") {
-                linkEntries.push({
-                    title: "Billing",
-                    customContent: <LinkEntry>Billing</LinkEntry>,
-                    active: false,
-                    separator: false,
-                    link: "/billing",
-                });
-            }
-        }
-        // Org settings is available for all members, but only owner can change them
-        linkEntries.push({
-            title: "Settings",
-            customContent: <LinkEntry>Settings</LinkEntry>,
-            active: false,
-            separator: false,
-            link: "/settings",
-        });
     }
 
     // Ensure only last link entry has a separator
@@ -128,16 +156,9 @@ export default function OrganizationSelector() {
                   {
                       title: "Create a new organization",
                       customContent: (
-                          <div className="w-full text-gray-500 flex items-center">
+                          <div className="w-full text-pk-content-secondary flex items-center">
                               <span className="flex-1">New Organization</span>
-                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14" className="w-3.5">
-                                  <path
-                                      fill="currentColor"
-                                      fillRule="evenodd"
-                                      d="M7 0a1 1 0 011 1v5h5a1 1 0 110 2H8v5a1 1 0 11-2 0V8H1a1 1 0 010-2h5V1a1 1 0 011-1z"
-                                      clipRule="evenodd"
-                                  />
-                              </svg>
+                              <PlusIcon size={20} className="size-3.5" />
                           </div>
                       ),
                       link: "/orgs/new",
@@ -152,7 +173,7 @@ export default function OrganizationSelector() {
     const classes =
         "flex h-full text-base py-0 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700";
     return (
-        <ContextMenu customClasses="w-64 left-0" menuEntries={entries}>
+        <ContextMenu customClasses="w-64 left-0 text-left" menuEntries={entries}>
             <div className={`${classes} rounded-2xl pl-1`}>
                 <div className="py-1 pr-1 flex font-medium max-w-xs truncate">
                     <OrgIcon

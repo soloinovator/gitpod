@@ -10,13 +10,14 @@ import {
     WorkspaceTimeoutDuration,
     WORKSPACE_TIMEOUT_DEFAULT_LONG,
     WORKSPACE_LIFETIME_LONG,
+    MAX_PARALLEL_WORKSPACES_FREE,
+    MAX_PARALLEL_WORKSPACES_PAID,
 } from "@gitpod/gitpod-protocol";
 import { AttributionId } from "@gitpod/gitpod-protocol/lib/attribution";
 import { BillingTier } from "@gitpod/gitpod-protocol/lib/protocol";
 import { inject, injectable } from "inversify";
 import { BillingModes } from "./billing-mode";
-import { EntitlementServiceUBP } from "./entitlement-service-ubp";
-import { VerificationService } from "../auth/verification-service";
+import { EntitlementServiceUBP, getRunningInstancesCount, LazyOrganizationService } from "./entitlement-service-ubp";
 import { log } from "@gitpod/gitpod-protocol/lib/util/logging";
 
 export interface MayStartWorkspaceResult {
@@ -48,6 +49,14 @@ export interface EntitlementService {
         organizationId: string,
         runningInstances: Promise<WorkspaceInstance[]>,
     ): Promise<MayStartWorkspaceResult>;
+
+    /**
+     * What amount of parallel workspaces a user may start based on their subscription
+     * @param userId
+     * @param organizationId
+     * @returns the maximum number of parallel workspaces the user may start, or undefined if there is no limit
+     */
+    getMaxParallelWorkspaces(userId: string, organizationId: string): Promise<number | undefined>;
 
     /**
      * A user may set the workspace timeout if they have a professional subscription
@@ -96,7 +105,7 @@ export class EntitlementServiceImpl implements EntitlementService {
     constructor(
         @inject(BillingModes) private readonly billingModes: BillingModes,
         @inject(EntitlementServiceUBP) private readonly ubp: EntitlementServiceUBP,
-        @inject(VerificationService) private readonly verificationService: VerificationService,
+        @inject(LazyOrganizationService) private readonly organizationService: LazyOrganizationService,
     ) {}
 
     async mayStartWorkspace(
@@ -105,16 +114,25 @@ export class EntitlementServiceImpl implements EntitlementService {
         runningInstances: Promise<WorkspaceInstance[]>,
     ): Promise<MayStartWorkspaceResult> {
         try {
-            const verification = await this.verificationService.needsVerification(user);
-            if (verification) {
-                return {
-                    needsVerification: true,
-                };
-            }
             const billingMode = await this.billingModes.getBillingMode(user.id, organizationId);
+            const organizationSettings = await this.organizationService().getSettings(user.id, organizationId);
+
             switch (billingMode.mode) {
                 case "none":
-                    // if payment is not enabled users can start as many parallel workspaces as they want
+                    // the default limit is MAX_PARALLEL_WORKSPACES_PAID, but organizations can set their own different limit
+                    // we use || here because the default value is 0 and we want to use the default limit if the organization limit is not set
+                    const maxParallelRunningWorkspaces =
+                        organizationSettings.maxParallelRunningWorkspaces || MAX_PARALLEL_WORKSPACES_PAID;
+                    const current = await getRunningInstancesCount(runningInstances);
+                    if (current >= maxParallelRunningWorkspaces) {
+                        return {
+                            hitParallelWorkspaceLimit: {
+                                current,
+                                max: maxParallelRunningWorkspaces,
+                            },
+                        };
+                    }
+
                     return {};
                 case "usage-based":
                     return this.ubp.mayStartWorkspace(user, organizationId, runningInstances);
@@ -127,12 +145,26 @@ export class EntitlementServiceImpl implements EntitlementService {
         }
     }
 
+    async getMaxParallelWorkspaces(userId: string, organizationId: string): Promise<number | undefined> {
+        try {
+            const billingMode = await this.billingModes.getBillingMode(userId, organizationId);
+            switch (billingMode.mode) {
+                case "none":
+                    return undefined;
+                case "usage-based":
+                    return this.ubp.getMaxParallelWorkspaces(userId, organizationId);
+            }
+        } catch (err) {
+            log.warn({ userId }, "EntitlementService error: getMaxParallelWorkspaces", err);
+            return MAX_PARALLEL_WORKSPACES_FREE;
+        }
+    }
+
     async maySetTimeout(userId: string, organizationId: string): Promise<boolean> {
         try {
             const billingMode = await this.billingModes.getBillingMode(userId, organizationId);
             switch (billingMode.mode) {
                 case "none":
-                    // when payment is disabled users can do everything
                     return true;
                 case "usage-based":
                     return this.ubp.maySetTimeout(userId, organizationId);

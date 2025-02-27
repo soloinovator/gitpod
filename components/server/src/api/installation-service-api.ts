@@ -14,6 +14,8 @@ import {
     CreateBlockedRepositoryResponse,
     DeleteBlockedRepositoryRequest,
     DeleteBlockedRepositoryResponse,
+    GetInstallationConfigurationRequest,
+    GetInstallationConfigurationResponse,
     GetInstallationWorkspaceDefaultImageRequest,
     GetInstallationWorkspaceDefaultImageResponse,
     GetOnboardingStateRequest,
@@ -94,6 +96,7 @@ export class InstallationServiceAPI implements ServiceImpl<typeof InstallationSe
         const blockedRepository = await this.installationService.adminCreateBlockedRepository(ctxUserId(), {
             urlRegexp: req.urlRegexp,
             blockUser: req.blockUser ?? false,
+            blockFreeUsage: req.blockFreeUsage ?? false,
         });
         return new CreateBlockedRepositoryResponse({
             blockedRepository: this.apiConverter.toBlockedRepository(blockedRepository),
@@ -146,6 +149,16 @@ export class InstallationServiceAPI implements ServiceImpl<typeof InstallationSe
         const state = await this.installationService.getOnboardingState();
         return new GetOnboardingStateResponse({
             onboardingState: this.apiConverter.toOnboardingState(state),
+        });
+    }
+
+    @Unauthenticated()
+    async getInstallationConfiguration(
+        req: GetInstallationConfigurationRequest,
+    ): Promise<GetInstallationConfigurationResponse> {
+        const config = await this.installationService.getInstallationConfiguration();
+        return new GetInstallationConfigurationResponse({
+            configuration: this.apiConverter.toInstallationConfiguration(config),
         });
     }
 }

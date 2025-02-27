@@ -18,14 +18,20 @@ import {
     CancelPrebuildResponse,
     WatchPrebuildRequest,
     WatchPrebuildResponse,
+    ListOrganizationPrebuildsRequest,
+    ListOrganizationPrebuildsResponse,
 } from "@gitpod/public-api/lib/gitpod/v1/prebuild_pb";
 import { inject, injectable } from "inversify";
 import { ProjectsService } from "../projects/projects-service";
-import { PrebuildManager } from "../prebuilds/prebuild-manager";
+import { PrebuildFilter, PrebuildManager } from "../prebuilds/prebuild-manager";
 import { validate as uuidValidate } from "uuid";
 import { ApplicationError, ErrorCodes } from "@gitpod/gitpod-protocol/lib/messaging/error";
 import { ctxSignal, ctxUserId } from "../util/request-context";
 import { UserService } from "../user/user-service";
+import { PaginationToken, generatePaginationToken, parsePaginationToken } from "./pagination";
+import { PaginationResponse } from "@gitpod/public-api/lib/gitpod/v1/pagination_pb";
+import { Sort, SortOrder } from "@gitpod/public-api/lib/gitpod/v1/sorting_pb";
+import { Config } from "../config";
 
 @injectable()
 export class PrebuildServiceAPI implements ServiceImpl<typeof PrebuildServiceInterface> {
@@ -38,6 +44,8 @@ export class PrebuildServiceAPI implements ServiceImpl<typeof PrebuildServiceInt
     @inject(PublicAPIConverter)
     private readonly apiConverter: PublicAPIConverter;
 
+    @inject(Config) private readonly config: Config;
+
     @inject(UserService)
     private readonly userService: UserService;
 
@@ -48,6 +56,7 @@ export class PrebuildServiceAPI implements ServiceImpl<typeof PrebuildServiceInt
         const userId = ctxUserId();
         const user = await this.userService.findUserById(userId, userId);
         const prebuild = await this.prebuildManager.triggerPrebuild({}, user, request.configurationId, request.gitRef);
+
         return new StartPrebuildResponse({
             prebuildId: prebuild.prebuildId,
         });
@@ -68,7 +77,7 @@ export class PrebuildServiceAPI implements ServiceImpl<typeof PrebuildServiceInt
             throw new ApplicationError(ErrorCodes.NOT_FOUND, `prebuild ${request.prebuildId} not found`);
         }
         return new GetPrebuildResponse({
-            prebuild: this.apiConverter.toPrebuild(result),
+            prebuild: this.apiConverter.toPrebuild(this.config.hostUrl.toString(), result),
         });
     }
 
@@ -80,7 +89,7 @@ export class PrebuildServiceAPI implements ServiceImpl<typeof PrebuildServiceInt
                 const prebuild = await this.prebuildManager.getPrebuild({}, userId, pbws.id);
                 if (prebuild) {
                     return new ListPrebuildsResponse({
-                        prebuilds: [this.apiConverter.toPrebuild(prebuild)],
+                        prebuilds: [this.apiConverter.toPrebuild(this.config.hostUrl.toString(), prebuild)],
                     });
                 }
             }
@@ -97,9 +106,9 @@ export class PrebuildServiceAPI implements ServiceImpl<typeof PrebuildServiceInt
             branch: request.gitRef || undefined,
             limit: request.pagination?.pageSize || undefined,
         });
-        // TODO paggination
+        // TODO pagination
         return new ListPrebuildsResponse({
-            prebuilds: this.apiConverter.toPrebuilds(result),
+            prebuilds: this.apiConverter.toPrebuilds(this.config.hostUrl.toString(), result),
         });
     }
 
@@ -108,33 +117,97 @@ export class PrebuildServiceAPI implements ServiceImpl<typeof PrebuildServiceInt
             throw new ApplicationError(ErrorCodes.BAD_REQUEST, "scope is required");
         }
 
-        let configurationId = request.scope.value;
-        if (request.scope.case === "prebuildId") {
-            const resp = await this.getPrebuild(
-                new GetPrebuildRequest({
-                    prebuildId: request.scope.value,
-                }),
-            );
-            yield new WatchPrebuildResponse({
-                prebuild: resp.prebuild,
-            });
-            configurationId = resp.prebuild!.configurationId;
-        }
-        const it = await this.prebuildManager.watchPrebuildStatus(ctxUserId(), configurationId, {
-            signal: ctxSignal(),
-        });
+        const filter = {
+            configurationId: request.scope.case === "configurationId" ? request.scope.value : undefined,
+            prebuildId: request.scope.case === "prebuildId" ? request.scope.value : undefined,
+        };
+        const it = this.prebuildManager.getAndWatchPrebuildStatus(ctxUserId(), filter, { signal: ctxSignal() });
+
         for await (const pb of it) {
-            if (request.scope.case === "prebuildId") {
-                if (pb.info.id !== request.scope.value) {
-                    continue;
-                }
-            } else if (pb.info.projectId !== request.scope.value) {
-                continue;
-            }
-            const prebuild = this.apiConverter.toPrebuild(pb);
-            if (prebuild) {
-                yield new WatchPrebuildResponse({ prebuild });
-            }
+            yield new WatchPrebuildResponse({
+                prebuild: this.apiConverter.toPrebuild(this.config.hostUrl.toString(), pb),
+            });
         }
+    }
+
+    async listOrganizationPrebuilds(
+        request: ListOrganizationPrebuildsRequest,
+    ): Promise<ListOrganizationPrebuildsResponse> {
+        const { organizationId, pagination, filter } = request;
+        const userId = ctxUserId();
+
+        const limit = pagination?.pageSize ?? 25;
+        if (limit > 100) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "pageSize cannot be larger than 100");
+        }
+        if (limit <= 0) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "pageSize must be greater than 0");
+        }
+        if ((filter?.searchTerm || "").length > 100) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "searchTerm must be less than 100 characters");
+        }
+        if (!uuidValidate(organizationId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "organizationId is required");
+        }
+
+        if (filter?.configuration?.branch && !filter?.configuration.id) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "configurationId is required when branch is specified");
+        }
+
+        const paginationToken = parsePaginationToken(request.pagination?.token);
+
+        const prebuildsFilter: PrebuildFilter = {
+            configuration: filter?.configuration,
+            searchTerm: filter?.searchTerm,
+        };
+
+        if (filter?.state) {
+            prebuildsFilter.state = this.apiConverter.fromPrebuildFilterState(filter?.state);
+        }
+
+        const sort = request.sort?.[0];
+        const sorting = this.apiConverter.fromSort(
+            new Sort({
+                field: sort?.field ?? "creationTime",
+                order: sort?.order ?? SortOrder.DESC,
+            }),
+        );
+        if (!sorting.order) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "sort.order must have a valid value");
+        }
+
+        const prebuilds = await this.prebuildManager.listPrebuilds(
+            {},
+            userId,
+            organizationId,
+            {
+                limit: limit + 1,
+                offset: paginationToken.offset,
+            },
+            prebuildsFilter,
+            {
+                ...sorting,
+                order: sorting.order ?? "DESC",
+            },
+        );
+
+        const apiPrebuilds = prebuilds.map((pb) => this.apiConverter.toPrebuild(this.config.hostUrl.toString(), pb));
+        const pagedResult = apiPrebuilds.slice(0, limit);
+
+        const response = new ListOrganizationPrebuildsResponse({
+            prebuilds: pagedResult,
+        });
+        response.pagination = new PaginationResponse();
+
+        // If we got back an extra row, it means there are more results
+        if (apiPrebuilds.length > limit) {
+            const nextToken: PaginationToken = {
+                offset: paginationToken.offset + limit,
+            };
+
+            response.pagination.nextToken = generatePaginationToken(nextToken);
+        }
+
+        return response;
     }
 }

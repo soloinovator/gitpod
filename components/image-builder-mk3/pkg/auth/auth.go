@@ -18,12 +18,14 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
+	"github.com/distribution/reference"
 	"github.com/docker/cli/cli/config/configfile"
-	"github.com/docker/distribution/reference"
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/registry"
+	"github.com/opentracing/opentracing-go"
 	"golang.org/x/xerrors"
 
 	"github.com/gitpod-io/gitpod/common-go/log"
+	"github.com/gitpod-io/gitpod/common-go/tracing"
 	"github.com/gitpod-io/gitpod/common-go/watch"
 	"github.com/gitpod-io/gitpod/image-builder/api"
 )
@@ -206,7 +208,7 @@ func (ath *ECRAuthenticator) Authenticate(ctx context.Context, registry string) 
 }
 
 // Authentication represents docker usable authentication
-type Authentication types.AuthConfig
+type Authentication registry.AuthConfig
 
 func (a *Authentication) Empty() bool {
 	if a == nil {
@@ -277,7 +279,11 @@ type Resolver struct {
 }
 
 // ResolveRequestAuth computes the allowed authentication for a build based on its request
-func (r Resolver) ResolveRequestAuth(auth *api.BuildRegistryAuth) (authFor AllowedAuthFor) {
+func (r Resolver) ResolveRequestAuth(ctx context.Context, auth *api.BuildRegistryAuth) (authFor AllowedAuthFor) {
+	span, _ := opentracing.StartSpanFromContext(ctx, "ResolveRequestAuth")
+	var err error
+	defer tracing.FinishSpan(span, &err)
+
 	// by default we allow nothing
 	authFor = AllowedAuthForNone()
 	if auth == nil {
@@ -388,7 +394,7 @@ func (a AllowedAuthFor) additionalAuth(domain string) *Authentication {
 }
 
 // ImageBuildAuth is the format image builds needs
-type ImageBuildAuth map[string]types.AuthConfig
+type ImageBuildAuth map[string]registry.AuthConfig
 
 // GetImageBuildAuthFor produces authentication in the format an image builds needs
 func (a AllowedAuthFor) GetImageBuildAuthFor(ctx context.Context, auth RegistryAuthenticator, additionalRegistries []string, blocklist []string) (res ImageBuildAuth) {
@@ -405,7 +411,7 @@ func (a AllowedAuthFor) GetImageBuildAuthFor(ctx context.Context, auth RegistryA
 			continue
 		}
 		ath := a.additionalAuth(reg)
-		res[reg] = types.AuthConfig(*ath)
+		res[reg] = registry.AuthConfig(*ath)
 	}
 	for _, reg := range additionalRegistries {
 		ath, err := auth.Authenticate(ctx, reg)
@@ -416,7 +422,7 @@ func (a AllowedAuthFor) GetImageBuildAuthFor(ctx context.Context, auth RegistryA
 		if ath.Empty() {
 			continue
 		}
-		res[reg] = types.AuthConfig(*ath)
+		res[reg] = registry.AuthConfig(*ath)
 	}
 
 	return

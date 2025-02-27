@@ -124,6 +124,11 @@ type WorkspaceConfig struct {
 	} `json:"contentService"`
 
 	EnableProtectedSecrets *bool `json:"enableProtectedSecrets"`
+
+	ImageBuilderMk3 struct {
+		BaseImageRepositoryName      string `json:"baseImageRepositoryName"`
+		WorkspaceImageRepositoryName string `json:"workspaceImageRepositoryName"`
+	} `json:"imageBuilderMk3"`
 }
 
 type WorkspaceClass struct {
@@ -209,6 +214,16 @@ type WebAppConfig struct {
 	SpiceDB                      *SpiceDBConfig         `json:"spicedb,omitempty"`
 	CertmanagerNamespaceOverride string                 `json:"certmanagerNamespaceOverride,omitempty"`
 	Redis                        *RedisConfig           `json:"redis"`
+
+	// ProxySettings is used if the gitpod cell uses some proxy for connectivity
+	ProxySettings *ProxySettings `json:"proxySettings"`
+}
+
+type ProxySettings struct {
+	HttpProxy  string `json:"http_proxy"`
+	HttpsProxy string `json:"https_proxy"`
+	// NoProxy setting should be used for the CIDRs and hostnames that should be not using the proxy URLs
+	NoProxy string `json:"no_proxy"`
 }
 
 type WorkspaceDefaults struct {
@@ -254,11 +269,14 @@ type ServerConfig struct {
 	DisableWorkspaceGarbageCollection bool              `json:"disableWorkspaceGarbageCollection"`
 	DisableCompleteSnapshotJob        bool              `json:"disableCompleteSnapshotJob"`
 	InactivityPeriodForReposInDays    *int              `json:"inactivityPeriodForReposInDays"`
-	ShowSetupModal                    *bool             `json:"showSetupModal"`
-	IsSingleOrgInstallation           bool              `json:"isSingleOrgInstallation"`
+	// deprecated: use IsDedicatedInstallation instead
+	IsSingleOrgInstallation bool `json:"isSingleOrgInstallation"`
+	IsDedicatedInstallation bool `json:"isDedicatedInstallation"`
 
 	// @deprecated use containerRegistry.privateBaseImageAllowList instead
 	DefaultBaseImageRegistryWhiteList []string `json:"defaultBaseImageRegistryWhitelist"`
+
+	GoogleCloudProfilerEnabled bool `json:"gcpProfilerEnabled,omitempty"`
 }
 
 type ProxyConfig struct {

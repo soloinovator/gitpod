@@ -6,21 +6,31 @@
 
 import { Link } from "react-router-dom";
 import { Button, ButtonProps } from "@podkit/buttons/Button";
-import React from "react";
+import { forwardRef, HTMLAttributeAnchorTarget } from "react";
 
 export interface LinkButtonProps extends ButtonProps {
     asChild?: false;
     href: string;
+    target?: HTMLAttributeAnchorTarget;
+    isExternalUrl?: boolean;
 }
 
 /**
  * A HTML anchor element styled as a button.
  */
-export const LinkButton = React.forwardRef<HTMLButtonElement, LinkButtonProps>(
-    ({ asChild, children, href, ...props }, ref) => {
+export const LinkButton = forwardRef<HTMLButtonElement, LinkButtonProps>(
+    ({ asChild, children, href, target, ...props }, ref) => {
         return (
             <Button ref={ref} {...props} asChild>
-                <Link to={href}>{children}</Link>
+                {props.isExternalUrl ? (
+                    <a href={href} target={target ?? "_blank"} rel="noreferrer">
+                        {children}
+                    </a>
+                ) : (
+                    <Link to={href} target={target}>
+                        {children}
+                    </Link>
+                )}
             </Button>
         );
     },

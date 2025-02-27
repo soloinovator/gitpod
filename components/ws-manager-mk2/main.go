@@ -33,22 +33,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	common_grpc "github.com/gitpod-io/gitpod/common-go/grpc"
 	"github.com/gitpod-io/gitpod/common-go/log"
 	"github.com/gitpod-io/gitpod/common-go/pprof"
 	"github.com/gitpod-io/gitpod/common-go/tracing"
+	"github.com/gitpod-io/gitpod/components/scrubber"
 	imgbldr "github.com/gitpod-io/gitpod/image-builder/api"
 	regapi "github.com/gitpod-io/gitpod/registry-facade/api"
-	wsmanapi "github.com/gitpod-io/gitpod/ws-manager/api"
-	config "github.com/gitpod-io/gitpod/ws-manager/api/config"
-	workspacev1 "github.com/gitpod-io/gitpod/ws-manager/api/crd/v1"
-
-	"github.com/gitpod-io/gitpod/components/scrubber"
 	"github.com/gitpod-io/gitpod/ws-manager-mk2/controllers"
 	"github.com/gitpod-io/gitpod/ws-manager-mk2/pkg/maintenance"
 	imgproxy "github.com/gitpod-io/gitpod/ws-manager-mk2/pkg/proxy"
 	"github.com/gitpod-io/gitpod/ws-manager-mk2/service"
+	wsmanapi "github.com/gitpod-io/gitpod/ws-manager/api"
+	config "github.com/gitpod-io/gitpod/ws-manager/api/config"
+	workspacev1 "github.com/gitpod-io/gitpod/ws-manager/api/crd/v1"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -125,16 +126,31 @@ func main() {
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                        scheme,
-		MetricsBindAddress:            cfg.Prometheus.Addr,
-		Port:                          9443,
+		Scheme:  scheme,
+		Metrics: metricsserver.Options{BindAddress: cfg.Prometheus.Addr},
+		Cache: cache.Options{
+			DefaultNamespaces: map[string]cache.Config{
+				cfg.Manager.Namespace:        {},
+				cfg.Manager.SecretsNamespace: {},
+			},
+		},
+		WebhookServer: webhook.NewServer(webhook.Options{
+			Port: 9443,
+		}),
 		HealthProbeBindAddress:        cfg.Health.Addr,
 		LeaderElection:                true,
 		LeaderElectionID:              "ws-manager-mk2-leader.gitpod.io",
 		LeaderElectionReleaseOnCancel: true,
-		NewCache: func(config *rest.Config, opts cache.Options) (cache.Cache, error) {
-			opts.Namespaces = []string{cfg.Manager.Namespace, cfg.Manager.SecretsNamespace}
-			return cache.New(config, opts)
+		NewClient: func(config *rest.Config, options client.Options) (client.Client, error) {
+			config.QPS = 100
+			config.Burst = 150
+
+			c, err := client.New(config, options)
+			if err != nil {
+				return nil, err
+			}
+
+			return c, nil
 		},
 	})
 	if err != nil {
@@ -185,7 +201,7 @@ func main() {
 		<-mgr.Elected()
 
 		workspaceReconciler, err := controllers.NewWorkspaceReconciler(
-			mgr.GetClient(), mgr.GetScheme(), mgr.GetEventRecorderFor("workspace"), &cfg.Manager, metrics.Registry, maintenanceReconciler)
+			mgr.GetClient(), mgr.GetConfig(), mgr.GetScheme(), mgr.GetEventRecorderFor("workspace"), &cfg.Manager, metrics.Registry, maintenanceReconciler)
 		if err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "Workspace")
 			os.Exit(1)

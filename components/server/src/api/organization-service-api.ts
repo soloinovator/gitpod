@@ -35,10 +35,12 @@ import {
     UpdateOrganizationSettingsRequest,
     UpdateOrganizationSettingsResponse,
     ListOrganizationsRequest_Scope,
+    ListOrganizationWorkspaceClassesRequest,
+    ListOrganizationWorkspaceClassesResponse,
 } from "@gitpod/public-api/lib/gitpod/v1/organization_pb";
 import { PublicAPIConverter } from "@gitpod/public-api-common/lib/public-api-converter";
 import { OrganizationService } from "../orgs/organization-service";
-import { OrganizationSettings as ProtocolOrganizationSettings } from "@gitpod/gitpod-protocol";
+import { OrganizationSettings } from "@gitpod/gitpod-protocol";
 import { PaginationResponse } from "@gitpod/public-api/lib/gitpod/v1/pagination_pb";
 import { validate as uuidValidate } from "uuid";
 import { ctxUserId } from "../util/request-context";
@@ -52,6 +54,19 @@ export class OrganizationServiceAPI implements ServiceImpl<typeof OrganizationSe
         @inject(PublicAPIConverter)
         private readonly apiConverter: PublicAPIConverter,
     ) {}
+
+    async listOrganizationWorkspaceClasses(
+        req: ListOrganizationWorkspaceClassesRequest,
+        _: HandlerContext,
+    ): Promise<ListOrganizationWorkspaceClassesResponse> {
+        if (!uuidValidate(req.organizationId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "organizationId is required");
+        }
+        const list = await this.orgService.listWorkspaceClasses(ctxUserId(), req.organizationId);
+        return new ListOrganizationWorkspaceClassesResponse({
+            workspaceClasses: list.map((e) => this.apiConverter.toWorkspaceClass(e)),
+        });
+    }
 
     async createOrganization(req: CreateOrganizationRequest, _: HandlerContext): Promise<CreateOrganizationResponse> {
         // TODO(gpl) This mimicks the current behavior of adding the subjectId as owner
@@ -224,9 +239,10 @@ export class OrganizationServiceAPI implements ServiceImpl<typeof OrganizationSe
             throw new ApplicationError(ErrorCodes.BAD_REQUEST, "organizationId is required");
         }
 
-        const settings = await this.orgService.getSettings(ctxUserId(), req.organizationId);
+        const settings = await this.orgService.getSettingsWithResolvedWelcomeMessage(ctxUserId(), req.organizationId);
         const response = new GetOrganizationSettingsResponse();
         response.settings = this.apiConverter.toOrganizationSettings(settings);
+
         return response;
     }
 
@@ -238,21 +254,63 @@ export class OrganizationServiceAPI implements ServiceImpl<typeof OrganizationSe
             throw new ApplicationError(ErrorCodes.BAD_REQUEST, "organizationId is required");
         }
 
-        const update: Partial<ProtocolOrganizationSettings> = {};
-        if (typeof req.workspaceSharingDisabled === "boolean") {
-            update.workspaceSharingDisabled = req.workspaceSharingDisabled;
-        }
-        if (typeof req.defaultWorkspaceImage === "string") {
-            update.defaultWorkspaceImage = req.defaultWorkspaceImage;
-        }
-
-        if (Object.keys(update).length === 0) {
-            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "nothing to update");
+        if (req.restrictedEditorNames.length > 0 && !req.updateRestrictedEditorNames) {
+            throw new ApplicationError(
+                ErrorCodes.BAD_REQUEST,
+                "updateRestrictedEditorNames is required to be true to update restrictedEditorNames",
+            );
         }
 
-        const settings = await this.orgService.updateSettings(ctxUserId(), req.organizationId, update);
+        if (req.allowedWorkspaceClasses.length > 0 && !req.updateAllowedWorkspaceClasses) {
+            throw new ApplicationError(
+                ErrorCodes.BAD_REQUEST,
+                "updateAllowedWorkspaceClasses is required to be true to update allowedWorkspaceClasses",
+            );
+        }
+
+        if (
+            req.pinnedEditorVersions &&
+            Object.keys(req.pinnedEditorVersions).length > 0 &&
+            !req.updatePinnedEditorVersions
+        ) {
+            throw new ApplicationError(
+                ErrorCodes.BAD_REQUEST,
+                "updatePinnedEditorVersions is required to be true to update pinnedEditorVersions",
+            );
+        }
+
+        if (req.roleRestrictions.length > 0 && !req.updateRoleRestrictions) {
+            throw new ApplicationError(
+                ErrorCodes.BAD_REQUEST,
+                "updateRoleRestrictions is required to be true when updating roleRestrictions",
+            );
+        }
+        if (
+            req.onboardingSettings &&
+            req.onboardingSettings.recommendedRepositories.length > 0 &&
+            !req.onboardingSettings.updateRecommendedRepositories
+        ) {
+            throw new ApplicationError(
+                ErrorCodes.BAD_REQUEST,
+                "recommendedRepositories can only be set when updateRecommendedRepositories is true",
+            );
+        }
+
+        // convert to internal type, mapping any errors to BAD_REQUEST as it's only doing conversions anyway
+        let update: OrganizationSettings;
+        try {
+            update = this.apiConverter.fromOrganizationSettings(req);
+        } catch (err) {
+            let msg = "conversion error";
+            if (err.message) {
+                msg += ": " + err.message;
+            }
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, msg);
+        }
+
+        const updatedSettings = await this.orgService.updateSettings(ctxUserId(), req.organizationId, update);
         return new UpdateOrganizationSettingsResponse({
-            settings: this.apiConverter.toOrganizationSettings(settings),
+            settings: this.apiConverter.toOrganizationSettings(updatedSettings),
         });
     }
 }

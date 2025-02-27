@@ -37,6 +37,9 @@ import { PrebuildManager } from "../prebuilds/prebuild-manager";
 import { VerificationService } from "../auth/verification-service";
 import { InstallationService } from "../auth/installation-service";
 import { RateLimitter } from "../rate-limitter";
+import { Authorizer } from "../authorization/authorizer";
+import { AuditLogService } from "../audit/AuditLogService";
+import { EntitlementService, EntitlementServiceImpl } from "../billing/entitlement-service";
 
 const expect = chai.expect;
 
@@ -71,6 +74,9 @@ export class APITeamsServiceSpec {
         this.container.bind(VerificationService).toConstantValue({} as VerificationService);
         this.container.bind(InstallationService).toConstantValue({} as InstallationService);
         this.container.bind(RateLimitter).toConstantValue({} as RateLimitter);
+        this.container.bind(Authorizer).toConstantValue({} as Authorizer);
+        this.container.bind(AuditLogService).toConstantValue({} as AuditLogService);
+        this.container.bind(EntitlementService).toConstantValue({} as EntitlementServiceImpl);
 
         // Clean-up database
         const typeorm = testContainer.get<TypeORM>(TypeORM);

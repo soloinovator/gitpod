@@ -64,8 +64,6 @@ type WorkspaceSpec struct {
 	StorageQuota int `json:"storageQuota,omitempty"`
 
 	SSHGatewayCAPublicKey string `json:"sshGatewayCAPublicKey,omitempty"`
-
-	SSHKey *SSHKey `json:"ssh,omitempty"`
 }
 
 type Ownership struct {
@@ -120,14 +118,6 @@ type TimeoutSpec struct {
 	MaximumLifetime *metav1.Duration `json:"maximumLifetime,omitempty"`
 }
 
-// SSHKey temporal generated SSH key required to access the workspace
-type SSHKey struct {
-	// +kubebuilder:validation:Required
-	Public string `json:"publicKey"`
-	// +kubebuilder:validation:Required
-	Private string `json:"privateKey"`
-}
-
 type AdmissionSpec struct {
 	// +kubebuilder:default=Owner
 	Level AdmissionLevel `json:"level"`
@@ -178,9 +168,63 @@ func (ps PortSpec) Equal(other PortSpec) bool {
 	return true
 }
 
+type WorkspaceImageInfo struct {
+	// +kubebuilder:validation:Required
+	TotalSize int64 `json:"totalSize"`
+
+	// +kubebuilder:validation:Optional
+	WorkspaceImageSize int64 `json:"workspaceImageSize,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	WorkspaceImageRef string `json:"workspaceImageRef,omitempty"`
+}
+
+type InitializerMetrics struct {
+	// Git contains metrics for the git initializer step
+	// +kubebuilder:validation:Optional
+	Git *InitializerStepMetric `json:"git"`
+
+	// FileDownload contains metrics for the file download initializer step
+	// +kubebuilder:validation:Optional
+	FileDownload *InitializerStepMetric `json:"fileDownload"`
+
+	// Snapshot contains metrics for the snapshot initializer step
+	// This used for workspaces started from snapshots.
+	// +kubebuilder:validation:Optional
+	Snapshot *InitializerStepMetric `json:"snapshot"`
+
+	// Backup contains metrics for the backup initializer step
+	// +kubebuilder:validation:Optional
+	Backup *InitializerStepMetric `json:"backup"`
+
+	// Prebuild contains metrics for the prebuild initializer step
+	// +kubebuilder:validation:Optional
+	Prebuild *InitializerStepMetric `json:"prebuild"`
+
+	// Composite contains metrics for the composite initializer step
+	// +kubebuilder:validation:Optional
+	Composite *InitializerStepMetric `json:"composite"`
+}
+
+type InitializerStepMetric struct {
+	// +kubebuilder:validation:Optional
+	Duration *metav1.Duration `json:"duration"`
+
+	// +kubebuilder:validation:Optional
+	Size uint64 `json:"size"`
+}
+
 // WorkspaceStatus defines the observed state of Workspace
 type WorkspaceStatus struct {
-	PodStarts  int    `json:"podStarts"`
+	PodStarts int `json:"podStarts"`
+
+	// +kubebuilder:validation:Optional
+	PodRecreated int `json:"podRecreated"`
+	// +kubebuilder:validation:Optional
+	PodDeletionTime *metav1.Time `json:"podDeletionTime,omitempty"`
+	// +kubebuilder:validation:Optional
+	PodStoppingTime *metav1.Time `json:"podStoppingTime,omitempty"`
+
 	URL        string `json:"url,omitempty" scrub:"redact"`
 	OwnerToken string `json:"ownerToken,omitempty" scrub:"redact"`
 
@@ -203,6 +247,12 @@ type WorkspaceStatus struct {
 	Storage StorageStatus `json:"storage,omitempty"`
 
 	LastActivity *metav1.Time `json:"lastActivity,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	ImageInfo *WorkspaceImageInfo `json:"imageInfo,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	InitializerMetrics *InitializerMetrics `json:"initializerMetrics,omitempty"`
 }
 
 func (s *WorkspaceStatus) SetCondition(cond metav1.Condition) {
@@ -269,8 +319,19 @@ const (
 	VolumeAttached WorkspaceCondition = "VolumeAttached"
 	// VolumeMounted is true if the workspace's volume has been mounted on the node
 	VolumeMounted WorkspaceCondition = "VolumeMounted"
-	// ThroughputAdjusted is true if the throughput of the workspace volume has been adjusted
-	WorkspaceConditionThroughputAdjusted WorkspaceCondition = "ThroughputAdjusted"
+
+	// WorkspaceContainerRunning is true if the workspace container is running.
+	// Used to determine if a backup can be taken, only once the container is stopped.
+	WorkspaceConditionContainerRunning WorkspaceCondition = "WorkspaceContainerRunning"
+
+	// WorkspaceConditionPodRejected is true if we detected that the pod was rejected by the node
+	WorkspaceConditionPodRejected WorkspaceCondition = "PodRejected"
+
+	// WorkspaceConditionStateWiped is true once all state has successfully been wiped by ws-daemon. This is only set if PodRejected=true, and the rejected workspace has been deleted.
+	WorkspaceConditionStateWiped WorkspaceCondition = "StateWiped"
+
+	// WorkspaceConditionForceKilledTask is true if we send a SIGKILL to the task
+	WorkspaceConditionForceKilledTask WorkspaceCondition = "ForceKilledTask"
 )
 
 func NewWorkspaceConditionDeployed() metav1.Condition {
@@ -295,6 +356,24 @@ func NewWorkspaceConditionFailed(message string) metav1.Condition {
 		Type:               string(WorkspaceConditionFailed),
 		LastTransitionTime: metav1.Now(),
 		Status:             metav1.ConditionTrue,
+		Message:            message,
+	}
+}
+
+func NewWorkspaceConditionPodRejected(message string, status metav1.ConditionStatus) metav1.Condition {
+	return metav1.Condition{
+		Type:               string(WorkspaceConditionPodRejected),
+		LastTransitionTime: metav1.Now(),
+		Status:             status,
+		Message:            message,
+	}
+}
+
+func NewWorkspaceConditionStateWiped(message string, status metav1.ConditionStatus) metav1.Condition {
+	return metav1.Condition{
+		Type:               string(WorkspaceConditionStateWiped),
+		LastTransitionTime: metav1.Now(),
+		Status:             status,
 		Message:            message,
 	}
 }
@@ -399,9 +478,17 @@ func NewWorkspaceConditionNodeDisappeared() metav1.Condition {
 	}
 }
 
-func NewWorkspaceConditionThroughputAdjusted() metav1.Condition {
+func NewWorkspaceConditionContainerRunning(status metav1.ConditionStatus) metav1.Condition {
 	return metav1.Condition{
-		Type:               string(WorkspaceConditionThroughputAdjusted),
+		Type:               string(WorkspaceConditionContainerRunning),
+		LastTransitionTime: metav1.Now(),
+		Status:             status,
+	}
+}
+
+func NewWorkspaceConditionForceKilledTask() metav1.Condition {
+	return metav1.Condition{
+		Type:               string(WorkspaceConditionForceKilledTask),
 		LastTransitionTime: metav1.Now(),
 		Status:             metav1.ConditionTrue,
 	}
@@ -491,6 +578,28 @@ func (w *Workspace) IsHeadless() bool {
 
 func (w *Workspace) IsConditionTrue(condition WorkspaceCondition) bool {
 	return wsk8s.ConditionPresentAndTrue(w.Status.Conditions, string(condition))
+}
+
+func (w *Workspace) IsConditionPresent(condition WorkspaceCondition) bool {
+	c := wsk8s.GetCondition(w.Status.Conditions, string(condition))
+	return c != nil
+}
+
+func (w *Workspace) GetConditionState(condition WorkspaceCondition) (state metav1.ConditionStatus, ok bool) {
+	cond := wsk8s.GetCondition(w.Status.Conditions, string(condition))
+	if cond == nil {
+		return "", false
+	}
+	return cond.Status, true
+}
+
+// UpsertConditionOnStatusChange calls SetCondition if the condition does not exist or it's status or message has changed.
+func (w *Workspace) UpsertConditionOnStatusChange(newCondition metav1.Condition) {
+	oldCondition := wsk8s.GetCondition(w.Status.Conditions, newCondition.Type)
+	if oldCondition != nil && oldCondition.Status == newCondition.Status && oldCondition.Message == newCondition.Message {
+		return
+	}
+	w.Status.SetCondition(newCondition)
 }
 
 // OWI produces the owner, workspace, instance log metadata from the information

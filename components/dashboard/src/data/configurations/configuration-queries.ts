@@ -16,6 +16,7 @@ import {
     ConfigurationEnvironmentVariable,
     EnvironmentVariableAdmission,
 } from "@gitpod/public-api/lib/gitpod/v1/envvar_pb";
+import { ErrorCodes } from "@gitpod/gitpod-protocol/lib/messaging/error";
 
 const BASE_KEY = "configurations";
 
@@ -32,7 +33,7 @@ export const useListConfigurations = (options: ListConfigurationsArgs) => {
     const { searchTerm = "", prebuildsEnabled, pageSize, sortBy, sortOrder } = options;
 
     return useInfiniteQuery(
-        getListConfigurationsQueryKey(org?.id || "", options),
+        getListConfigurationsQueryKey(org?.id ?? "", options),
         // QueryFn receives the past page's pageParam as it's argument
         async ({ pageParam: nextToken }) => {
             if (!org) {
@@ -82,14 +83,44 @@ export const getListConfigurationsVariablesQueryKey = (configurationId: string) 
     return [BASE_KEY, "variable", "list", { configurationId }];
 };
 
-export const useConfiguration = (configurationId: string) => {
-    return useQuery<Configuration | undefined, Error>(getConfigurationQueryKey(configurationId), async () => {
-        const { configuration } = await configurationClient.getConfiguration({
-            configurationId,
-        });
+export const useConfiguration = (configurationId?: string) => {
+    // As we want to return "undefined" from this query/cache, and useQuery doesn't allow that, we need:
+    //  - use "null" internally/in the cache
+    //  - transform it to "undefined" using the "select" option
+    return useQuery<Configuration | null, Error, Configuration | undefined>(
+        getConfigurationQueryKey(configurationId),
+        async () => {
+            if (!configurationId) {
+                return null;
+            }
 
-        return configuration;
-    });
+            const { configuration } = await configurationClient.getConfiguration({
+                configurationId,
+            });
+
+            return configuration || null;
+        },
+        {
+            select: (data) => data || undefined,
+            retry: (failureCount, error) => {
+                if (!configurationId) {
+                    return false;
+                }
+
+                if (failureCount > 3) {
+                    return false;
+                }
+
+                if (error && [ErrorCodes.NOT_FOUND, ErrorCodes.PERMISSION_DENIED].includes((error as any).code)) {
+                    return false;
+                }
+
+                return true;
+            },
+            cacheTime: 1000 * 60 * 5, // 5m
+            staleTime: 1000 * 30, // 30s
+        },
+    );
 };
 
 type DeleteConfigurationArgs = {
@@ -132,15 +163,19 @@ export const useConfigurationMutation = () => {
             }
 
             queryClient.invalidateQueries({ queryKey: ["configurations", "list"] });
-            queryClient.invalidateQueries({ queryKey: getConfigurationQueryKey(configuration.configurationId) });
 
             return updated.configuration;
+        },
+        onSuccess: (configuration) => {
+            if (configuration) {
+                queryClient.setQueryData(getConfigurationQueryKey(configuration.id), configuration);
+            }
         },
     });
 };
 
-export const getConfigurationQueryKey = (configurationId: string) => {
-    const key: any[] = [BASE_KEY, { configurationId }];
+export const getConfigurationQueryKey = (configurationId?: string) => {
+    const key: any[] = [BASE_KEY, { configurationId: configurationId || "undefined" }];
 
     return key;
 };
@@ -166,13 +201,9 @@ export const useCreateConfiguration = () => {
                 throw new Error("No org currently selected");
             }
 
-            // TODO: Should we push this into the api?
-            // ensure a .git suffix
-            const normalizedCloneURL = cloneUrl.endsWith(".git") ? cloneUrl : `${cloneUrl}.git`;
-
             const response = await configurationClient.createConfiguration({
                 name,
-                cloneUrl: normalizedCloneURL,
+                cloneUrl,
                 organizationId: org.id,
             });
             if (!response.configuration) {

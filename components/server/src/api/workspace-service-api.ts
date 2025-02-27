@@ -44,11 +44,14 @@ import {
     UpdateWorkspacePortRequest,
     UpdateWorkspacePortResponse,
     WorkspacePort_Protocol,
+    ListWorkspaceSessionsRequest,
+    ListWorkspaceSessionsResponse,
+    WorkspaceSession_Owner,
 } from "@gitpod/public-api/lib/gitpod/v1/workspace_pb";
 import { inject, injectable } from "inversify";
 import { WorkspaceService } from "../workspace/workspace-service";
 import { PublicAPIConverter } from "@gitpod/public-api-common/lib/public-api-converter";
-import { ctxClientRegion, ctxSignal, ctxUserId } from "../util/request-context";
+import { ctxClientRegion, ctxSignal, ctxUserId, runWithSubjectId } from "../util/request-context";
 import { parsePagination } from "@gitpod/public-api-common/lib/public-api-pagination";
 import { PaginationResponse } from "@gitpod/public-api/lib/gitpod/v1/pagination_pb";
 import { validate as uuidValidate } from "uuid";
@@ -56,6 +59,8 @@ import { ApplicationError, ErrorCodes } from "@gitpod/gitpod-protocol/lib/messag
 import { ContextService } from "../workspace/context-service";
 import { UserService } from "../user/user-service";
 import { ContextParser } from "../workspace/context-parser-service";
+import { isWorkspaceId } from "@gitpod/gitpod-protocol/lib/util/parse-workspace-id";
+import { SYSTEM_USER, SYSTEM_USER_ID } from "../authorization/authorizer";
 
 @injectable()
 export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceInterface> {
@@ -66,8 +71,8 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
     @inject(ContextParser) private contextParser: ContextParser;
 
     async getWorkspace(req: GetWorkspaceRequest, _: HandlerContext): Promise<GetWorkspaceResponse> {
-        if (!req.workspaceId) {
-            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "workspaceId is required");
+        if (!isWorkspaceId(req.workspaceId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "a valid workspaceId is required");
         }
         const info = await this.workspaceService.getWorkspace(ctxUserId(), req.workspaceId);
         const response = new GetWorkspaceResponse();
@@ -79,37 +84,19 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
         req: WatchWorkspaceStatusRequest,
         _: HandlerContext,
     ): AsyncIterable<WatchWorkspaceStatusResponse> {
-        if (req.workspaceId) {
-            const instance = await this.workspaceService.getCurrentInstance(ctxUserId(), req.workspaceId);
-            const status = this.apiConverter.toWorkspace(instance).status;
-            if (status) {
-                const response = new WatchWorkspaceStatusResponse();
-                response.workspaceId = instance.workspaceId;
-                response.status = status;
-                yield response;
-            }
-        }
-        const it = this.workspaceService.watchWorkspaceStatus(ctxUserId(), { signal: ctxSignal() });
-        for await (const instance of it) {
-            if (!instance) {
-                continue;
-            }
-            if (req.workspaceId && instance.workspaceId !== req.workspaceId) {
-                continue;
-            }
-            const status = this.apiConverter.toWorkspace(instance).status;
-            if (!status) {
-                continue;
-            }
-            const response = new WatchWorkspaceStatusResponse();
-            response.workspaceId = instance.workspaceId;
-            response.status = status;
-            yield response;
+        const it = this.workspaceService.getAndWatchWorkspaceStatus(ctxUserId(), req.workspaceId, {
+            signal: ctxSignal(),
+        });
+        for await (const status of it) {
+            yield status;
         }
     }
 
     async listWorkspaces(req: ListWorkspacesRequest, _: HandlerContext): Promise<ListWorkspacesResponse> {
-        const { limit } = parsePagination(req.pagination, 50);
+        if (req.pagination?.pageSize && req.pagination?.pageSize > 400) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "Pagesize must not exceed 400");
+        }
+        const { limit } = parsePagination(req.pagination, 50, 400);
         if (!uuidValidate(req.organizationId)) {
             throw new ApplicationError(ErrorCodes.BAD_REQUEST, "organizationId is required");
         }
@@ -124,6 +111,61 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
         response.workspaces = results.map((workspace) => this.apiConverter.toWorkspace(workspace));
         response.pagination = new PaginationResponse();
         response.pagination.total = resultTotal;
+        return response;
+    }
+
+    async listWorkspaceSessions(
+        req: ListWorkspaceSessionsRequest,
+        _: HandlerContext,
+    ): Promise<ListWorkspaceSessionsResponse> {
+        if (req.pagination?.pageSize && req.pagination?.pageSize > 400) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "Pagesize must not exceed 400");
+        }
+        const page = parsePagination(req.pagination, 100, 400);
+        if (!uuidValidate(req.organizationId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "organizationId is required");
+        }
+        const toDate = req.to?.toDate() || new Date();
+        // default 7 days before toDate
+        const fromDate = req.from?.toDate() || new Date(toDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+        // check fromDate is before toDate
+        if (fromDate.getTime() > toDate.getTime()) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "'from' is after 'to'");
+        }
+
+        const ownerMeta = new Map<string, WorkspaceSession_Owner>();
+        const results = await this.workspaceService.listWorkspaceSessions(
+            ctxUserId(),
+            req.organizationId,
+            fromDate,
+            toDate,
+            page.limit,
+            page.offset,
+        );
+        for (const { workspace } of results) {
+            const { ownerId } = workspace;
+            if (ownerId) {
+                if (!ownerMeta.has(ownerId)) {
+                    const user = await runWithSubjectId(SYSTEM_USER, async () =>
+                        this.userService.findUserById(SYSTEM_USER_ID, ownerId),
+                    );
+                    ownerMeta.set(
+                        ownerId,
+                        new WorkspaceSession_Owner({
+                            id: ownerId,
+                            name: user.fullName,
+                            avatarUrl: user.avatarUrl,
+                        }),
+                    );
+                }
+            }
+        }
+        const response = new ListWorkspaceSessionsResponse();
+        response.workspaceSessions = results.map((session) =>
+            this.apiConverter.toWorkspaceSession(session, ownerMeta.get(session.workspace.ownerId)!),
+        );
+
         return response;
     }
 
@@ -154,6 +196,7 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
             project,
             context,
             normalizedContextUrl,
+            contextUrl.workspaceClass,
         );
 
         await this.workspaceService.startWorkspace({}, user, workspace.id, {
@@ -164,6 +207,7 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
                 useLatestVersion: req.source.value.editor?.version
                     ? req.source.value.editor?.version === "latest"
                     : undefined,
+                preferToolbox: req.source.value.editor?.preferToolbox ?? false,
             },
             clientRegionCode: ctxClientRegion(),
         });
@@ -176,8 +220,8 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
 
     async startWorkspace(req: StartWorkspaceRequest): Promise<StartWorkspaceResponse> {
         // We rely on FGA to do the permission checking
-        if (!req.workspaceId) {
-            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "workspaceId is required");
+        if (!isWorkspaceId(req.workspaceId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "a valid workspaceId is required");
         }
         const user = await this.userService.findUserById(ctxUserId(), ctxUserId());
         const { workspace, latestInstance: instance } = await this.workspaceService.getWorkspace(
@@ -205,8 +249,8 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
         req: GetWorkspaceDefaultImageRequest,
         _: HandlerContext,
     ): Promise<GetWorkspaceDefaultImageResponse> {
-        if (!req.workspaceId) {
-            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "workspaceId is required");
+        if (!isWorkspaceId(req.workspaceId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "a valid workspaceId is required");
         }
         const result = await this.workspaceService.getWorkspaceDefaultImage(ctxUserId(), req.workspaceId);
         const response = new GetWorkspaceDefaultImageResponse({
@@ -224,8 +268,8 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
     }
 
     async sendHeartBeat(req: SendHeartBeatRequest, _: HandlerContext): Promise<SendHeartBeatResponse> {
-        if (!req.workspaceId) {
-            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "workspaceId is required");
+        if (!isWorkspaceId(req.workspaceId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "a valid workspaceId is required");
         }
         const info = await this.workspaceService.getWorkspace(ctxUserId(), req.workspaceId);
         if (!info.latestInstance?.id || info.latestInstance.status.phase !== "running") {
@@ -243,8 +287,8 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
         req: GetWorkspaceOwnerTokenRequest,
         _: HandlerContext,
     ): Promise<GetWorkspaceOwnerTokenResponse> {
-        if (!req.workspaceId) {
-            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "workspaceId is required");
+        if (!isWorkspaceId(req.workspaceId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "a valid workspaceId is required");
         }
         const ownerToken = await this.workspaceService.getOwnerToken(ctxUserId(), req.workspaceId);
         const response = new GetWorkspaceOwnerTokenResponse();
@@ -256,8 +300,8 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
         req: GetWorkspaceEditorCredentialsRequest,
         _: HandlerContext,
     ): Promise<GetWorkspaceEditorCredentialsResponse> {
-        if (!req.workspaceId) {
-            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "workspaceId is required");
+        if (!isWorkspaceId(req.workspaceId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "a valid workspaceId is required");
         }
         const credentials = await this.workspaceService.getIDECredentials(ctxUserId(), req.workspaceId);
         const response = new GetWorkspaceEditorCredentialsResponse();
@@ -266,8 +310,8 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
     }
 
     async updateWorkspace(req: UpdateWorkspaceRequest): Promise<UpdateWorkspaceResponse> {
-        if (!req.workspaceId) {
-            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "workspaceId is required");
+        if (!isWorkspaceId(req.workspaceId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "a valid workspaceId is required");
         }
         if (req.spec?.timeout?.inactivity?.seconds || (req.spec?.sshPublicKeys && req.spec?.sshPublicKeys.length > 0)) {
             throw new ApplicationError(ErrorCodes.UNIMPLEMENTED, "not implemented");
@@ -337,12 +381,17 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
         }
         const user = await this.userService.findUserById(ctxUserId(), ctxUserId());
         const context = await this.contextService.parseContextUrl(user, req.contextUrl);
-        return this.apiConverter.toParseContextURLResponse({}, context);
+        return this.apiConverter.toParseContextURLResponse(
+            {
+                warnings: context.warnings,
+            },
+            context,
+        );
     }
 
     async stopWorkspace(req: StopWorkspaceRequest): Promise<StopWorkspaceResponse> {
-        if (!req.workspaceId) {
-            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "workspaceId is required");
+        if (!isWorkspaceId(req.workspaceId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "a valid workspaceId is required");
         }
         await this.workspaceService.stopWorkspace(ctxUserId(), req.workspaceId, "stopped via API");
         const response = new StopWorkspaceResponse();
@@ -350,8 +399,8 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
     }
 
     async deleteWorkspace(req: DeleteWorkspaceRequest): Promise<DeleteWorkspaceResponse> {
-        if (!req.workspaceId) {
-            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "workspaceId is required");
+        if (!isWorkspaceId(req.workspaceId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "a valid workspaceId is required");
         }
         await this.workspaceService.deleteWorkspace(ctxUserId(), req.workspaceId, "user");
         const response = new DeleteWorkspaceResponse();
@@ -367,8 +416,8 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
     }
 
     async createWorkspaceSnapshot(req: CreateWorkspaceSnapshotRequest): Promise<CreateWorkspaceSnapshotResponse> {
-        if (!req.workspaceId) {
-            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "workspaceId is required");
+        if (!isWorkspaceId(req.workspaceId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "a valid workspaceId is required");
         }
         const snapshot = await this.workspaceService.takeSnapshot(ctxUserId(), {
             workspaceId: req.workspaceId,
@@ -388,8 +437,8 @@ export class WorkspaceServiceAPI implements ServiceImpl<typeof WorkspaceServiceI
     }
 
     async updateWorkspacePort(req: UpdateWorkspacePortRequest): Promise<UpdateWorkspacePortResponse> {
-        if (!req.workspaceId) {
-            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "workspaceId is required");
+        if (!isWorkspaceId(req.workspaceId)) {
+            throw new ApplicationError(ErrorCodes.BAD_REQUEST, "a valid workspaceId is required");
         }
         if (!req.port) {
             throw new ApplicationError(ErrorCodes.BAD_REQUEST, "port is required");

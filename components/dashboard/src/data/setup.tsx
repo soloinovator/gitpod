@@ -15,7 +15,7 @@ import { QueryCache, QueryClient, QueryKey } from "@tanstack/react-query";
 import { Message } from "@bufbuild/protobuf";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { FunctionComponent } from "react";
-import debounce from "lodash.debounce";
+import debounce from "lodash/debounce";
 // Need to import all the protobuf classes we want to support for hydration
 import * as OrganizationClasses from "@gitpod/public-api/lib/gitpod/v1/organization_pb";
 import * as WorkspaceClasses from "@gitpod/public-api/lib/gitpod/v1/workspace_pb";
@@ -29,11 +29,12 @@ import * as InstallationClasses from "@gitpod/public-api/lib/gitpod/v1/installat
 import * as SCMClasses from "@gitpod/public-api/lib/gitpod/v1/scm_pb";
 import * as SSHClasses from "@gitpod/public-api/lib/gitpod/v1/ssh_pb";
 import * as UserClasses from "@gitpod/public-api/lib/gitpod/v1/user_pb";
+import { ErrorCodes } from "@gitpod/gitpod-protocol/lib/messaging/error";
 
 // This is used to version the cache
 // If data we cache changes in a non-backwards compatible way, increment this version
 // That will bust any previous cache versions a client may have stored
-const CACHE_VERSION = "20";
+const CACHE_VERSION = "22";
 
 export function noPersistence(queryKey: QueryKey): QueryKey {
     return [...queryKey, "no-persistence"];
@@ -42,6 +43,8 @@ export function isNoPersistence(queryKey: QueryKey): boolean {
     return queryKey.some((e) => e === "no-persistence");
 }
 
+const defaultRetryTimes = 3;
+
 export const setupQueryClientProvider = () => {
     const client = new QueryClient({
         defaultOptions: {
@@ -49,6 +52,16 @@ export const setupQueryClientProvider = () => {
                 // Default stale time to help avoid re-fetching data too frequently
                 staleTime: 1000 * 5, // 5 seconds
                 refetchOnWindowFocus: false,
+                retry: (failureCount, error) => {
+                    if (failureCount > defaultRetryTimes) {
+                        return false;
+                    }
+                    // Don't retry if the error is a permission denied error
+                    if (error && (error as any).code === ErrorCodes.PERMISSION_DENIED) {
+                        return false;
+                    }
+                    return true;
+                },
             },
         },
         queryCache: new QueryCache({
@@ -205,7 +218,13 @@ export function hydrate(value: any): any {
             console.error("unsupported message type", messageName);
             return value;
         }
-        return (constructor as any).fromJsonString(json);
+        // Ensure an error w/ a single message doesn't prevent the entire cache from loading, as it will never get pruned
+        try {
+            return (constructor as any).fromJsonString(json);
+        } catch (e) {
+            console.error("unable to hydrate message", messageName, e, json);
+            return undefined;
+        }
     }
     if (value instanceof Object) {
         for (const key in value) {

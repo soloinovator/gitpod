@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2023 Gitpod GmbH. All rights reserved.
+ * Copyright (c) 2025 Gitpod GmbH. All rights reserved.
  * Licensed under the GNU Affero General Public License (AGPL).
  * See License.AGPL.txt in the project root for license information.
  */
@@ -177,6 +177,12 @@ export class FailedPreconditionDetails extends Message<FailedPreconditionDetails
      */
     value: ImageBuildLogsNotYetAvailableError;
     case: "imageBuildLogsNotYetAvailable";
+  } | {
+    /**
+     * @generated from field: gitpod.v1.CellDisabledError cell_is_disabled = 8;
+     */
+    value: CellDisabledError;
+    case: "cellIsDisabled";
   } | { case: undefined; value?: undefined } = { case: undefined };
 
   constructor(data?: PartialMessage<FailedPreconditionDetails>) {
@@ -194,6 +200,7 @@ export class FailedPreconditionDetails extends Message<FailedPreconditionDetails
     { no: 5, name: "repository_not_found", kind: "message", T: RepositoryNotFoundError, oneof: "reason" },
     { no: 6, name: "repository_unauthorized", kind: "message", T: RepositoryUnauthorizedError, oneof: "reason" },
     { no: 7, name: "image_build_logs_not_yet_available", kind: "message", T: ImageBuildLogsNotYetAvailableError, oneof: "reason" },
+    { no: 8, name: "cell_is_disabled", kind: "message", T: CellDisabledError, oneof: "reason" },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): FailedPreconditionDetails {
@@ -378,6 +385,16 @@ export class RepositoryNotFoundError extends Message<RepositoryNotFoundError> {
    */
   lastUpdate = "";
 
+  /**
+   * @generated from field: string repo_name = 6;
+   */
+  repoName = "";
+
+  /**
+   * @generated from field: string error_message = 7;
+   */
+  errorMessage = "";
+
   constructor(data?: PartialMessage<RepositoryNotFoundError>) {
     super();
     proto3.util.initPartial(data, this);
@@ -391,6 +408,8 @@ export class RepositoryNotFoundError extends Message<RepositoryNotFoundError> {
     { no: 3, name: "user_is_owner", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
     { no: 4, name: "user_scopes", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
     { no: 5, name: "last_update", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 6, name: "repo_name", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 7, name: "error_message", kind: "scalar", T: 9 /* ScalarType.STRING */ },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): RepositoryNotFoundError {
@@ -420,9 +439,29 @@ export class RepositoryUnauthorizedError extends Message<RepositoryUnauthorizedE
   host = "";
 
   /**
-   * @generated from field: repeated string scopes = 2;
+   * @generated from field: repeated string required_scopes = 2;
    */
-  scopes: string[] = [];
+  requiredScopes: string[] = [];
+
+  /**
+   * @generated from field: string provider_type = 3;
+   */
+  providerType = "";
+
+  /**
+   * @generated from field: string repo_name = 4;
+   */
+  repoName = "";
+
+  /**
+   * @generated from field: bool provider_is_connected = 5;
+   */
+  providerIsConnected = false;
+
+  /**
+   * @generated from field: bool is_missing_scopes = 6;
+   */
+  isMissingScopes = false;
 
   constructor(data?: PartialMessage<RepositoryUnauthorizedError>) {
     super();
@@ -433,7 +472,11 @@ export class RepositoryUnauthorizedError extends Message<RepositoryUnauthorizedE
   static readonly typeName = "gitpod.v1.RepositoryUnauthorizedError";
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
     { no: 1, name: "host", kind: "scalar", T: 9 /* ScalarType.STRING */ },
-    { no: 2, name: "scopes", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
+    { no: 2, name: "required_scopes", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
+    { no: 3, name: "provider_type", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 4, name: "repo_name", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 5, name: "provider_is_connected", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
+    { no: 6, name: "is_missing_scopes", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): RepositoryUnauthorizedError {
@@ -481,5 +524,36 @@ export class ImageBuildLogsNotYetAvailableError extends Message<ImageBuildLogsNo
 
   static equals(a: ImageBuildLogsNotYetAvailableError | PlainMessage<ImageBuildLogsNotYetAvailableError> | undefined, b: ImageBuildLogsNotYetAvailableError | PlainMessage<ImageBuildLogsNotYetAvailableError> | undefined): boolean {
     return proto3.util.equals(ImageBuildLogsNotYetAvailableError, a, b);
+  }
+}
+
+/**
+ * @generated from message gitpod.v1.CellDisabledError
+ */
+export class CellDisabledError extends Message<CellDisabledError> {
+  constructor(data?: PartialMessage<CellDisabledError>) {
+    super();
+    proto3.util.initPartial(data, this);
+  }
+
+  static readonly runtime: typeof proto3 = proto3;
+  static readonly typeName = "gitpod.v1.CellDisabledError";
+  static readonly fields: FieldList = proto3.util.newFieldList(() => [
+  ]);
+
+  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): CellDisabledError {
+    return new CellDisabledError().fromBinary(bytes, options);
+  }
+
+  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): CellDisabledError {
+    return new CellDisabledError().fromJson(jsonValue, options);
+  }
+
+  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): CellDisabledError {
+    return new CellDisabledError().fromJsonString(jsonString, options);
+  }
+
+  static equals(a: CellDisabledError | PlainMessage<CellDisabledError> | undefined, b: CellDisabledError | PlainMessage<CellDisabledError> | undefined): boolean {
+    return proto3.util.equals(CellDisabledError, a, b);
   }
 }

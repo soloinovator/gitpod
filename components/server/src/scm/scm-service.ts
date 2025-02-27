@@ -8,9 +8,8 @@ import { inject, injectable } from "inversify";
 import { Authorizer } from "../authorization/authorizer";
 import { Config } from "../config";
 import { TokenProvider } from "../user/token-provider";
-import { CommitContext, Project, SuggestedRepository, Token, User, WorkspaceInfo } from "@gitpod/gitpod-protocol";
+import { CommitContext, Project, SuggestedRepository, Token, WorkspaceInfo } from "@gitpod/gitpod-protocol";
 import { HostContextProvider } from "../auth/host-context-provider";
-import { RepoURL } from "../repohost";
 import { log } from "@gitpod/gitpod-protocol/lib/util/logging";
 import { AuthProviderService } from "../auth/auth-provider-service";
 import { UserService } from "../user/user-service";
@@ -51,19 +50,6 @@ export class ScmService {
         const { host } = query;
         const token = await this.tokenProvider.getTokenForHost(userId, host);
         return token;
-    }
-
-    public async installWebhookForPrebuilds(project: Project, installer: User) {
-        // Install the prebuilds webhook if possible
-        const { teamId, cloneUrl } = project;
-        const parsedUrl = RepoURL.parseRepoUrl(project.cloneUrl);
-        const hostContext = parsedUrl?.host ? this.hostContextProvider.get(parsedUrl?.host) : undefined;
-
-        const repositoryService = hostContext?.services?.repositoryService;
-        if (repositoryService) {
-            log.info({ organizationId: teamId, userId: installer.id }, "Update prebuild installation for project.");
-            await repositoryService.installAutomatedPrebuilds(installer, cloneUrl);
-        }
     }
 
     /**
@@ -217,8 +203,8 @@ export class ScmService {
                         suggestionFromRecentWorkspace(
                             {
                                 url: repoUrl,
+                                repositoryName: repoName ?? "",
                                 projectId: ws.workspace.projectId,
-                                repositoryName: repoName || "",
                             },
                             lastUse,
                         ),
@@ -235,7 +221,7 @@ export class ScmService {
         ]);
 
         const sortedRepos = sortSuggestedRepositories(
-            repoResults.map((r) => (r.status === "fulfilled" ? r.value || [] : [])).flat(),
+            repoResults.flatMap((r) => (r.status === "fulfilled" ? r.value || [] : [])),
         );
 
         // Convert to SuggestedRepository (drops sorting props)

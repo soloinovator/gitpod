@@ -21,8 +21,12 @@ export class FrontendDashboardServiceClient implements IDEFrontendDashboardServi
     private readonly onOpenBrowserIDEEmitter = new Emitter<void>();
     readonly onOpenBrowserIDE = this.onOpenBrowserIDEEmitter.event;
 
+    private readonly onWillRedirectEmitter = new Emitter<void>();
+    readonly onWillRedirect = this.onWillRedirectEmitter.event;
+
     private resolveInit!: () => void;
     private initPromise = new Promise<void>((resolve) => (this.resolveInit = resolve));
+    private featureFlags: Partial<IDEFrontendDashboardService.FeatureFlagsUpdateEventData["flags"]> = {};
 
     private version?: number;
 
@@ -50,12 +54,17 @@ export class FrontendDashboardServiceClient implements IDEFrontendDashboardServi
                 this.onDidChangeEmitter.fire(this.latestInfo);
             }
             if (IDEFrontendDashboardService.isRelocateEventData(event.data)) {
+                this.onWillRedirectEmitter.fire();
                 window.location.href = event.data.url;
             }
             if (IDEFrontendDashboardService.isOpenBrowserIDE(event.data)) {
                 this.onOpenBrowserIDEEmitter.fire(undefined);
             }
+            if (IDEFrontendDashboardService.isFeatureFlagsUpdateEventData(event.data)) {
+                this.featureFlags = event.data.flags;
+            }
         });
+        this.requestFreshFeatureFlags();
     }
     initialize(): Promise<void> {
         return this.initPromise;
@@ -135,6 +144,17 @@ export class FrontendDashboardServiceClient implements IDEFrontendDashboardServi
             { type: "ide-open-desktop", url } as IDEFrontendDashboardService.OpenDesktopIDE,
             serverUrl.url.origin,
         );
+    }
+
+    requestFreshFeatureFlags(): void {
+        window.postMessage(
+            { type: "ide-feature-flag-request" } as IDEFrontendDashboardService.FeatureFlagsRequestEventData,
+            serverUrl.url.origin,
+        );
+    }
+
+    isCheckReadyRetryEnabled(): boolean {
+        return !!this.featureFlags.supervisor_check_ready_retry;
     }
 }
 

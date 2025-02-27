@@ -40,9 +40,7 @@ describe("ScmService", async () => {
 
     beforeEach(async () => {
         container = createTestContainer();
-        Experiments.configureTestingClient({
-            centralizedPermissions: true,
-        });
+        Experiments.configureTestingClient({});
         service = container.get(ScmService);
         userService = container.get<UserService>(UserService);
         currentUser = await userService.createUser({
@@ -58,6 +56,8 @@ describe("ScmService", async () => {
     afterEach(async () => {
         // Clean-up database
         await resetDB(container.get(TypeORM));
+        // Deactivate all services
+        await container.unbindAllAsync();
     });
 
     describe("getToken", async () => {

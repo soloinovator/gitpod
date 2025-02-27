@@ -7,6 +7,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -59,7 +60,7 @@ func rewriteDockerAPIURL(u *url.URL, fromRepo, toRepo, host, tag string) {
 		from = "/v2/" + strings.Trim(fromRepo, "/") + "/"
 		to   = "/v2/" + strings.Trim(toRepo, "/") + "/"
 	)
-	u.Path = to + strings.TrimPrefix(u.Path, from)
+	u.Path = to + strings.TrimPrefix(strings.TrimPrefix(u.Path, from), "/")
 
 	// we reset the escaped encoding hint, because EscapedPath will produce a valid encoding.
 	u.RawPath = ""
@@ -94,7 +95,7 @@ func rewriteNonDockerAPIURL(u *url.URL, fromPrefix, toPrefix, host string) {
 	if toPrefix == "" {
 		to = "/"
 	}
-	u.Path = to + strings.TrimPrefix(u.Path, from)
+	u.Path = to + strings.TrimPrefix(strings.TrimPrefix(u.Path, from), "/")
 
 	// we reset the escaped encoding hint, because EscapedPath will produce a valid encoding.
 	u.RawPath = ""
@@ -110,6 +111,14 @@ func (proxy *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		repo  *Repo
 		alias string
 	)
+
+	// bypass for crane check
+	if r.URL.Path == "/v2/" {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+		return
+	}
+
 	for k, v := range proxy.Aliases {
 		// Docker api request
 		if strings.HasPrefix(r.URL.Path, "/v2/"+k+"/") {
@@ -221,7 +230,12 @@ func (proxy *Proxy) reverse(alias string) *httputil.ReverseProxy {
 			return true, nil
 		}
 		if resp.StatusCode == http.StatusBadRequest {
-			log.WithField("URL", resp.Request.URL.String()).Warn("bad request")
+			bodyBytes, err := io.ReadAll(resp.Body)
+			if err != nil {
+				log.WithError(err).WithField("URL", resp.Request.URL.String()).Warn("failed to read response body")
+			}
+
+			log.WithField("URL", resp.Request.URL.String()).WithField("Body", string(bodyBytes)).Warn("bad request")
 			return true, nil
 		}
 

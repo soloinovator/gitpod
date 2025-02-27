@@ -1,6 +1,9 @@
 {
     "result": {
-        "workspaceClass": "dev"
+        "workspaceClass": "dev",
+        "restrictedWorkspaceClasses": [],
+        "restrictedEditorNames": [],
+        "enableDockerdAuthentication": false
     },
     "err": ""
 }

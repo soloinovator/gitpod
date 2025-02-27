@@ -10,11 +10,8 @@ import { CallOptions, Code, ConnectError, PromiseClient, createPromiseClient } f
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { Disposable } from "@gitpod/gitpod-protocol";
 import { PublicAPIConverter } from "@gitpod/public-api-common/lib/public-api-converter";
-import { Project as ProtocolProject } from "@gitpod/gitpod-protocol/lib/teams-projects-protocol";
 import { HelloService } from "@gitpod/public-api/lib/gitpod/experimental/v1/dummy_connect";
 import { OIDCService } from "@gitpod/public-api/lib/gitpod/experimental/v1/oidc_connect";
-import { ProjectsService } from "@gitpod/public-api/lib/gitpod/experimental/v1/projects_connect";
-import { Project } from "@gitpod/public-api/lib/gitpod/experimental/v1/projects_pb";
 import { TokensService } from "@gitpod/public-api/lib/gitpod/experimental/v1/tokens_connect";
 import { OrganizationService } from "@gitpod/public-api/lib/gitpod/v1/organization_connect";
 import { WorkspaceService } from "@gitpod/public-api/lib/gitpod/v1/workspace_connect";
@@ -41,6 +38,7 @@ import { VerificationService } from "@gitpod/public-api/lib/gitpod/v1/verificati
 import { JsonRpcInstallationClient } from "./json-rpc-installation-client";
 import { InstallationService } from "@gitpod/public-api/lib/gitpod/v1/installation_connect";
 import { JsonRpcUserClient } from "./json-rpc-user-client";
+import { Timeout } from "@gitpod/gitpod-protocol/lib/util/timeout";
 
 const transport = createConnectTransport({
     baseUrl: `${window.location.protocol}//${window.location.host}/public-api`,
@@ -51,10 +49,6 @@ export const converter = new PublicAPIConverter();
 
 export const helloService = createServiceClient(HelloService);
 export const personalAccessTokensService = createPromiseClient(TokensService, transport);
-/**
- * @deprecated use configurationClient instead
- */
-export const projectsService = createPromiseClient(ProjectsService, transport);
 
 export const oidcService = createPromiseClient(OIDCService, transport);
 
@@ -67,7 +61,7 @@ export const organizationClient = createServiceClient(OrganizationService, {
     featureFlagSuffix: "organization",
 });
 
-// No jsonrcp client for the configuration service as it's only used in new UI of the dashboard
+// No jsonrpc client for the configuration service as it's only used in new UI of the dashboard
 export const configurationClient = createServiceClient(ConfigurationService);
 export const prebuildClient = createServiceClient(PrebuildService, {
     client: new JsonRpcPrebuildClient(),
@@ -109,56 +103,6 @@ export const installationClient = createServiceClient(InstallationService, {
     featureFlagSuffix: "installation",
 });
 
-export async function listAllProjects(opts: { orgId: string }): Promise<ProtocolProject[]> {
-    let pagination = {
-        page: 1,
-        pageSize: 100,
-    };
-
-    const response = await projectsService.listProjects({
-        teamId: opts.orgId,
-        pagination,
-    });
-    const results = response.projects;
-
-    while (results.length < response.totalResults) {
-        pagination = {
-            pageSize: 100,
-            page: 1 + pagination.page,
-        };
-        const response = await projectsService.listProjects({
-            teamId: opts.orgId,
-            pagination,
-        });
-        results.push(...response.projects);
-    }
-
-    return results.map(projectToProtocol);
-}
-
-export function projectToProtocol(project: Project): ProtocolProject {
-    return {
-        id: project.id,
-        name: project.name,
-        cloneUrl: project.cloneUrl,
-        creationTime: project.creationTime?.toDate().toISOString() || "",
-        teamId: project.teamId,
-        appInstallationId: "undefined",
-        settings: {
-            workspaceClasses: {
-                regular: project.settings?.workspace?.workspaceClass?.regular || "",
-            },
-            prebuilds: {
-                enable: project.settings?.prebuild?.enablePrebuilds,
-                branchStrategy: project.settings?.prebuild?.branchStrategy as any,
-                branchMatchingPattern: project.settings?.prebuild?.branchMatchingPattern,
-                prebuildInterval: project.settings?.prebuild?.prebuildInterval,
-                workspaceClass: project.settings?.prebuild?.workspaceClass,
-            },
-        },
-    };
-}
-
 let user: { id: string; email?: string } | undefined;
 export function updateUserForExperiments(newUser?: { id: string; email?: string }) {
     user = newUser;
@@ -175,14 +119,14 @@ function createServiceClient<T extends ServiceType>(
         get(grpcClient, prop) {
             const experimentsClient = getExperimentsClient();
             // TODO(ak) remove after migration
-            async function resolveClient(): Promise<PromiseClient<T>> {
+            async function resolveClient(preferJsonRpc?: boolean): Promise<PromiseClient<T>> {
                 if (!jsonRpcOptions) {
                     return grpcClient;
                 }
-                const featureFlags = [
-                    `dashboard_public_api_${jsonRpcOptions.featureFlagSuffix}_enabled`,
-                    "centralizedPermissions",
-                ];
+                if (preferJsonRpc) {
+                    return jsonRpcOptions.client;
+                }
+                const featureFlags = [`dashboard_public_api_${jsonRpcOptions.featureFlagSuffix}_enabled`];
                 const resolvedFlags = await Promise.all(
                     featureFlags.map((ff) =>
                         experimentsClient.getValueAsync(ff, false, {
@@ -243,7 +187,8 @@ function createServiceClient<T extends ServiceType>(
                 }
                 return (async function* () {
                     try {
-                        const client = await resolveClient();
+                        // for server streaming, we prefer jsonRPC
+                        const client = await resolveClient(true);
                         const generator = Reflect.apply(client[prop as any], client, args) as AsyncGenerator<any>;
                         for await (const item of generator) {
                             yield item;
@@ -276,14 +221,26 @@ export function stream<Response>(
     let backoff = BASE_BACKOFF;
     const abort = new AbortController();
     (async () => {
+        // Only timeout after 10 seconds with no data in some environments
+        const experiments = getExperimentsClient();
+        const enableTimeout = await experiments.getValueAsync("supervisor_check_ready_retry", false, {});
+
         while (!abort.signal.aborted) {
+            const connectionTimeout = new Timeout(10_000, () => enableTimeout);
             try {
+                connectionTimeout.start();
+                connectionTimeout.signal?.addEventListener("abort", () => {
+                    console.error("Connection timed out after no response for 10s");
+                });
+
                 for await (const response of factory({
-                    signal: abort.signal,
+                    signal: AbortSignal.any([abort.signal, connectionTimeout.signal!]),
                     // GCP timeout is 10 minutes, we timeout 3 mins earlier
                     // to avoid unknown network errors and reconnect gracefully
                     timeoutMs: 7 * 60 * 1000,
                 })) {
+                    connectionTimeout.clear(); // connection is alive now, clear timeout
+
                     backoff = BASE_BACKOFF;
                     cb(response);
                 }
@@ -305,6 +262,8 @@ export function stream<Response>(
                     backoff = Math.min(2 * backoff, MAX_BACKOFF);
                     console.error(e);
                 }
+            } finally {
+                connectionTimeout.clear();
             }
             const jitter = Math.random() * 0.3 * backoff;
             const delay = backoff + jitter;

@@ -21,13 +21,14 @@ import {
     WithSnapshot,
     Workspace,
     WorkspaceContext,
+    WorkspaceImageSourceDocker,
 } from "@gitpod/gitpod-protocol";
 import { ApplicationError, ErrorCodes } from "@gitpod/gitpod-protocol/lib/messaging/error";
 import { generateWorkspaceID } from "@gitpod/gitpod-protocol/lib/util/generate-workspace-id";
 import { log } from "@gitpod/gitpod-protocol/lib/util/logging";
 import { TraceContext } from "@gitpod/gitpod-protocol/lib/util/tracing";
 import { inject, injectable } from "inversify";
-import { RepoURL } from "../repohost";
+import { ImageFileRevisionMissing, RepoURL } from "../repohost";
 import { ConfigProvider } from "./config-provider";
 import { ImageSourceProvider } from "./image-source-provider";
 import { increasePrebuildsStartedCounter } from "../prometheus-metrics";
@@ -81,7 +82,10 @@ export class WorkspaceFactory {
 
         try {
             if (!CommitContext.is(context.actual)) {
-                throw new Error("Can only prebuild workspaces with a commit context");
+                throw new ApplicationError(
+                    ErrorCodes.BAD_REQUEST,
+                    "Can only prebuild workspaces with a commit context",
+                );
             }
 
             const { project, branch } = context;
@@ -102,7 +106,7 @@ export class WorkspaceFactory {
                 });
                 const wsInstance = await this.db.trace({ span }).findRunningInstance(existingPWS.buildWorkspaceId);
                 if (wsInstance) {
-                    throw new Error("A prebuild is already running for this commit.");
+                    throw new ApplicationError(ErrorCodes.CONFLICT, "A prebuild is already running for this commit.");
                 }
             };
 
@@ -324,6 +328,13 @@ export class WorkspaceFactory {
             const imageSource = await this.imageSourceProvider.getImageSource(ctx, user, context, config);
             if (config._origin === "derived" && literalConfig) {
                 (context as any as AdditionalContentContext).additionalFiles = { ...literalConfig };
+            }
+            if (WorkspaceImageSourceDocker.is(imageSource) && imageSource.dockerFileHash === ImageFileRevisionMissing) {
+                // we let the workspace create here and let it fail to build the image
+                imageSource.dockerFileHash = context.revision;
+                if (imageSource.dockerFileSource) {
+                    imageSource.dockerFileSource.revision = context.revision;
+                }
             }
 
             let projectId: string | undefined;

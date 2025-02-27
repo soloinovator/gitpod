@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2023 Gitpod GmbH. All rights reserved.
+ * Copyright (c) 2025 Gitpod GmbH. All rights reserved.
  * Licensed under the GNU Affero General Public License (AGPL).
  * See License.AGPL.txt in the project root for license information.
  */
@@ -9,7 +9,7 @@
 /* eslint-disable */
 // @ts-nocheck
 
-import { CreateOrganizationRequest, CreateOrganizationResponse, DeleteOrganizationMemberRequest, DeleteOrganizationMemberResponse, DeleteOrganizationRequest, DeleteOrganizationResponse, GetOrganizationInvitationRequest, GetOrganizationInvitationResponse, GetOrganizationRequest, GetOrganizationResponse, GetOrganizationSettingsRequest, GetOrganizationSettingsResponse, JoinOrganizationRequest, JoinOrganizationResponse, ListOrganizationMembersRequest, ListOrganizationMembersResponse, ListOrganizationsRequest, ListOrganizationsResponse, ResetOrganizationInvitationRequest, ResetOrganizationInvitationResponse, UpdateOrganizationMemberRequest, UpdateOrganizationMemberResponse, UpdateOrganizationRequest, UpdateOrganizationResponse, UpdateOrganizationSettingsRequest, UpdateOrganizationSettingsResponse } from "./organization_pb.js";
+import { CreateOrganizationRequest, CreateOrganizationResponse, DeleteOrganizationMemberRequest, DeleteOrganizationMemberResponse, DeleteOrganizationRequest, DeleteOrganizationResponse, GetOrganizationInvitationRequest, GetOrganizationInvitationResponse, GetOrganizationRequest, GetOrganizationResponse, GetOrganizationSettingsRequest, GetOrganizationSettingsResponse, JoinOrganizationRequest, JoinOrganizationResponse, ListOrganizationMembersRequest, ListOrganizationMembersResponse, ListOrganizationsRequest, ListOrganizationsResponse, ListOrganizationWorkspaceClassesRequest, ListOrganizationWorkspaceClassesResponse, ResetOrganizationInvitationRequest, ResetOrganizationInvitationResponse, UpdateOrganizationMemberRequest, UpdateOrganizationMemberResponse, UpdateOrganizationRequest, UpdateOrganizationResponse, UpdateOrganizationSettingsRequest, UpdateOrganizationSettingsResponse } from "./organization_pb.js";
 import { MethodKind } from "@bufbuild/protobuf";
 
 /**
@@ -160,6 +160,18 @@ export const OrganizationService = {
       name: "UpdateOrganizationSettings",
       I: UpdateOrganizationSettingsRequest,
       O: UpdateOrganizationSettingsResponse,
+      kind: MethodKind.Unary,
+    },
+    /**
+     * ListOrganizationWorkspaceClasses lists workspace classes of a
+     * Organization.
+     *
+     * @generated from rpc gitpod.v1.OrganizationService.ListOrganizationWorkspaceClasses
+     */
+    listOrganizationWorkspaceClasses: {
+      name: "ListOrganizationWorkspaceClasses",
+      I: ListOrganizationWorkspaceClassesRequest,
+      O: ListOrganizationWorkspaceClassesResponse,
       kind: MethodKind.Unary,
     },
   }

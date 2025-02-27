@@ -8,23 +8,23 @@ import { injectable } from "inversify";
 import express from "express";
 import { AuthProviderInfo } from "@gitpod/gitpod-protocol";
 import { log } from "@gitpod/gitpod-protocol/lib/util/logging";
-import { GitHubScope } from "./scopes";
 import { AuthUserSetup } from "../auth/auth-provider";
 import { Octokit } from "@octokit/rest";
 import { GitHubApiError } from "./api";
 import { GenericAuthProvider } from "../auth/generic-auth-provider";
 import { oauthUrls } from "./github-urls";
+import { GitHubOAuthScopes } from "@gitpod/public-api-common/lib/auth-providers";
 
 @injectable()
 export class GitHubAuthProvider extends GenericAuthProvider {
     get info(): AuthProviderInfo {
         return {
             ...this.defaultInfo(),
-            scopes: GitHubScope.All,
+            scopes: GitHubOAuthScopes.ALL,
             requirements: {
-                default: GitHubScope.Requirements.DEFAULT,
-                publicRepo: GitHubScope.Requirements.PUBLIC_REPO,
-                privateRepo: GitHubScope.Requirements.PRIVATE_REPO,
+                default: GitHubOAuthScopes.Requirements.DEFAULT,
+                publicRepo: GitHubOAuthScopes.Requirements.PUBLIC_REPO,
+                privateRepo: GitHubOAuthScopes.Requirements.PRIVATE_REPO,
             },
         };
     }
@@ -40,7 +40,7 @@ export class GitHubAuthProvider extends GenericAuthProvider {
             ...oauth!,
             authorizationUrl: oauth.authorizationUrl || defaultUrls.authorizationUrl,
             tokenUrl: oauth.tokenUrl || defaultUrls.tokenUrl,
-            scope: GitHubScope.All.join(scopeSeparator),
+            scope: GitHubOAuthScopes.ALL.join(scopeSeparator),
             scopeSeparator,
         };
     }
@@ -52,7 +52,7 @@ export class GitHubAuthProvider extends GenericAuthProvider {
         state: string,
         scope?: string[],
     ) {
-        super.authorize(req, res, next, state, scope ? scope : GitHubScope.Requirements.DEFAULT);
+        super.authorize(req, res, next, state, scope ? scope : GitHubOAuthScopes.Requirements.DEFAULT);
     }
 
     /**
@@ -99,6 +99,13 @@ export class GitHubAuthProvider extends GenericAuthProvider {
                 data: { id, login, avatar_url, name, company, created_at },
                 headers,
             } = currentUser;
+            const publicAvatarURL = new URL(avatar_url);
+            if (publicAvatarURL.host === "private-avatars.githubusercontent.com") {
+                // github has recently been rolling out private JWT-signed avatar URLs which expire after a short time
+                // we need to use the public avatar URL instead so that the avatar is displayed correctly and fits into our database column (which is capped at 255 chars)
+                publicAvatarURL.host = "avatars.githubusercontent.com";
+                publicAvatarURL.searchParams.delete("jwt");
+            }
 
             // https://developer.github.com/apps/building-oauth-apps/understanding-scopes-for-oauth-apps/
             // e.g. X-OAuth-Scopes: repo, user
@@ -125,7 +132,7 @@ export class GitHubAuthProvider extends GenericAuthProvider {
                 authUser: {
                     authId: String(id),
                     authName: login,
-                    avatarUrl: avatar_url,
+                    avatarUrl: publicAvatarURL.toString(),
                     name,
                     primaryEmail: filterPrimaryEmail(userEmails),
                     company,

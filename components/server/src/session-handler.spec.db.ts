@@ -14,6 +14,7 @@ import { v4 } from "uuid";
 import { SessionHandler } from "./session-handler";
 import { createTestContainer } from "./test/service-testing-container-module";
 import { UserService } from "./user/user-service";
+import { fail } from "assert";
 
 describe("SessionHandler", () => {
     let container: Container;
@@ -55,6 +56,9 @@ describe("SessionHandler", () => {
     beforeEach(async () => {
         container = createTestContainer();
         sessionHandler = container.get(SessionHandler);
+        (sessionHandler as any).setHashedUserIdCookie = () => {
+            return;
+        };
         jwtSessionHandler = sessionHandler.jwtSessionConvertor();
         const userService = container.get(UserService);
         // insert some users to the DB to reproduce INC-379
@@ -77,6 +81,8 @@ describe("SessionHandler", () => {
     afterEach(async () => {
         const typeorm = container.get(TypeORM);
         await resetDB(typeorm);
+        // Deactivate all services
+        await container.unbindAllAsync();
     });
 
     describe("verify", () => {
@@ -100,6 +106,48 @@ describe("SessionHandler", () => {
             expect(user).to.be.undefined;
         });
     });
+
+    describe("verifyJWTCookie", () => {
+        it("should return undefined for an empty cookie", async () => {
+            const claims = await sessionHandler.verifyJWTCookie("");
+            expect(claims).to.be.undefined;
+        });
+        it("should return undefined for an invalid cookie", async () => {
+            const claims = await sessionHandler.verifyJWTCookie("invalid");
+            expect(claims).to.be.undefined;
+        });
+        it("should return claims for a valid JWT with correct 'sub' claim", async () => {
+            const cookie = await sessionHandler.createJWTSessionCookie(existingUser.id);
+            const claims = await sessionHandler.verifyJWTCookie(`${cookie.name}=${cookie.value}`);
+            expect(claims?.sub).to.be.equal(existingUser.id);
+        });
+        it("should return undefined for a valid JWT with incorrect 'sub' claim", async () => {
+            const unexisingUserId = v4();
+            const cookie = await sessionHandler.createJWTSessionCookie(unexisingUserId);
+            const claims = await sessionHandler.verifyJWTCookie(`${cookie.name}=${cookie.value}`);
+            expect(claims).to.not.be.undefined;
+            expect(claims?.sub).to.be.equal(unexisingUserId);
+        });
+        it("should return claims for the first valid JWT with correct 'sub' claim", async () => {
+            const validCookie = await sessionHandler.createJWTSessionCookie(existingUser.id);
+            const claims = await sessionHandler.verifyJWTCookie(
+                `${validCookie.name}=invalid_value_1; ${validCookie.name}=${validCookie.value}; ${validCookie.name}=invalid_value_2;`,
+            );
+            expect(claims?.sub).to.be.equal(existingUser.id);
+        });
+        it("should throw if there are only invalid JWTs", async () => {
+            const validCookie = await sessionHandler.createJWTSessionCookie(existingUser.id);
+            try {
+                await sessionHandler.verifyJWTCookie(
+                    `${validCookie.name}=invalid_value_1; ${validCookie.name}=invalid_value_2;`,
+                );
+                fail("Expected an error to be thrown");
+            } catch (err) {
+                expect(err).to.not.be.undefined;
+            }
+        });
+    });
+
     describe("createJWTSessionCookie", () => {
         it("should create a valid JWT token with correct attributes and cookie options", async () => {
             const maxAge = 7 * 24 * 60 * 60;
@@ -118,9 +166,9 @@ describe("SessionHandler", () => {
             expect(opts.httpOnly).to.equal(true);
             expect(opts.secure).to.equal(true);
             expect(opts.maxAge).to.equal(maxAge * 1000);
-            expect(opts.sameSite).to.equal("strict");
+            expect(opts.sameSite).to.equal("lax");
 
-            expect(name, "Check cookie name").to.equal("_gitpod_dev_jwt_");
+            expect(name, "Check cookie name").to.equal("__Host-_gitpod_dev_jwt_");
         });
     });
     describe("jwtSessionConvertor", () => {
@@ -162,9 +210,44 @@ describe("SessionHandler", () => {
             expect(res.cookie).to.be.undefined;
         });
         it("JWT cookie is present but invalid", async () => {
-            const res = await handle(existingUser, "_gitpod_dev_jwt_=invalid");
+            const res = await handle(undefined, "__Host-_gitpod_dev_jwt_=invalid");
             expect(res.status).to.equal(401);
-            expect(res.value).to.equal("JWT Session is invalid");
+            expect(res.value).to.equal("User has no valid session.");
+            expect(res.cookie).to.be.undefined;
+        });
+
+        it("old JWT cookie is ignored, new one is outdated and refreshed", async () => {
+            const oldExpiredCookie = await sessionHandler.createJWTSessionCookie(existingUser.id, {
+                issuedAtMs: Date.now() - SessionHandler.JWT_REFRESH_THRESHOLD - 1,
+            });
+            oldExpiredCookie.name = "_gitpod_dev_jwt_";
+            const newCookie = await sessionHandler.createJWTSessionCookie(existingUser.id, {
+                issuedAtMs: Date.now() - SessionHandler.JWT_REFRESH_THRESHOLD - 1,
+            });
+
+            const res = await handle(
+                existingUser,
+                `${oldExpiredCookie.name}=${oldExpiredCookie.value}; ${newCookie.name}=${newCookie.value}`,
+            );
+            expect(res.status).to.equal(200);
+            expect(res.value).to.equal("Refreshed JWT cookie issued.");
+            expect(res.cookie).to.not.be.undefined;
+            expect(res.cookie?.split("=")[0]).to.equal(newCookie.name);
+        });
+
+        it("ld JWT cookie is ignored, new one is accepted", async () => {
+            const oldExpiredCookie = await sessionHandler.createJWTSessionCookie(existingUser.id, {
+                issuedAtMs: Date.now() - SessionHandler.JWT_REFRESH_THRESHOLD - 1,
+            });
+            oldExpiredCookie.name = "_gitpod_dev_jwt_";
+            const newCookie = await sessionHandler.createJWTSessionCookie(existingUser.id);
+
+            const res = await handle(
+                existingUser,
+                `${oldExpiredCookie.name}=${oldExpiredCookie.value}; ${newCookie.name}=${newCookie.value}`,
+            );
+            expect(res.status).to.equal(200);
+            expect(res.value).to.equal("User session already has a valid JWT session.");
             expect(res.cookie).to.be.undefined;
         });
     });

@@ -28,11 +28,13 @@ import { startFixtureTest } from "./fixtures.spec";
 import { OrganizationRole } from "@gitpod/public-api/lib/gitpod/v1/organization_pb";
 import { BranchMatchingStrategy } from "@gitpod/public-api/lib/gitpod/v1/configuration_pb";
 import { AuthProviderType } from "@gitpod/public-api/lib/gitpod/v1/authprovider_pb";
-import { Workspace, WorkspacePhase_Phase } from "@gitpod/public-api/lib/gitpod/v1/workspace_pb";
+import { Workspace, WorkspacePhase_Phase, WorkspaceSession_Owner } from "@gitpod/public-api/lib/gitpod/v1/workspace_pb";
 import { WorkspaceAndInstance } from "@gitpod/gitpod-protocol";
 
 describe("PublicAPIConverter", () => {
     const converter = new PublicAPIConverter();
+
+    const testGitpodHost = "https://gitpod-test.preview.gitpod-dev.com/";
 
     describe("golden tests", () => {
         it("toWorkspaceSnapshot", async () => {
@@ -84,7 +86,7 @@ describe("PublicAPIConverter", () => {
                     input.arg1,
                     input.arg2 ? Workspace.fromJson(input.arg2) : undefined,
                 );
-                // Use toJsonString since JSON.stringify cann't decode BigInt
+                // Use toJsonString since JSON.stringify can't decode BigInt
                 return JSON.parse(result.toJsonString());
             });
         });
@@ -100,6 +102,18 @@ describe("PublicAPIConverter", () => {
                     latestInstance: WorkspaceAndInstance.toInstance(input),
                 });
             });
+        });
+
+        it("toWorkspaceSession", async () => {
+            await startFixtureTest("../fixtures/toWorkspaceSession_*.json", async (input) =>
+                converter.toWorkspaceSession(
+                    input,
+                    new WorkspaceSession_Owner({
+                        id: "123",
+                        name: "Kum Quat",
+                    }),
+                ),
+            );
         });
 
         it("toConfiguration", async () => {
@@ -172,8 +186,16 @@ describe("PublicAPIConverter", () => {
             );
         });
 
+        it("toOrganizationEnvironmentVariable", async () => {
+            await startFixtureTest("../fixtures/toOrganizationEnvironmentVariable_*.json", async (input) =>
+                converter.toOrganizationEnvironmentVariable(input),
+            );
+        });
+
         it("toPrebuild", async () => {
-            await startFixtureTest("../fixtures/toPrebuild_*.json", async (input) => converter.toPrebuild(input));
+            await startFixtureTest("../fixtures/toPrebuild_*.json", async (input) =>
+                converter.toPrebuild(testGitpodHost, input),
+            );
         });
 
         it("toSCMToken", async () => {
@@ -236,6 +258,69 @@ describe("PublicAPIConverter", () => {
         });
     });
 
+    describe("toDurationFromMillis", () => {
+        it("should convert 0 milliseconds to 0 seconds and 0 nanos", () => {
+            const result = converter.toDurationFromMillis(0);
+            expect(result.seconds).to.equal(BigInt(0));
+            expect(result.nanos).to.equal(0);
+        });
+
+        it("should convert 999 milliseconds to 0 seconds and 999000000 nanos", () => {
+            const result = converter.toDurationFromMillis(999);
+            expect(result.seconds).to.equal(BigInt(0));
+            expect(result.nanos).to.equal(999000000);
+        });
+
+        it("should convert 1000 milliseconds to 1 second and 0 nanos", () => {
+            const result = converter.toDurationFromMillis(1000);
+            expect(result.seconds).to.equal(BigInt(1));
+            expect(result.nanos).to.equal(0);
+        });
+
+        it("should convert 1500 milliseconds to 1 second and 500000000 nanos", () => {
+            const result = converter.toDurationFromMillis(1500);
+            expect(result.seconds).to.equal(BigInt(1));
+            expect(result.nanos).to.equal(500000000);
+        });
+
+        it("should convert 123456789 milliseconds to 123456 seconds and 789000000 nanos", () => {
+            const result = converter.toDurationFromMillis(123456789);
+            expect(result.seconds).to.equal(BigInt(123456));
+            expect(result.nanos).to.equal(789000000);
+        });
+
+        it("should convert 987654321 milliseconds to 987654 seconds and 321000000 nanos", () => {
+            const result = converter.toDurationFromMillis(987654321);
+            expect(result.seconds).to.equal(BigInt(987654));
+            expect(result.nanos).to.equal(321000000);
+        });
+
+        it("should convert 1001 milliseconds to 1 second and 1000000 nanos", () => {
+            const result = converter.toDurationFromMillis(1001);
+            expect(result.seconds).to.equal(BigInt(1));
+            expect(result.nanos).to.equal(1000000);
+        });
+
+        it("should convert 2001 milliseconds to 2 seconds and 1000000 nanos", () => {
+            const result = converter.toDurationFromMillis(2001);
+            expect(result.seconds).to.equal(BigInt(2));
+            expect(result.nanos).to.equal(1000000);
+        });
+
+        it("should convert 2011.506776 milliseconds to 2 seconds and 11506776 nanos", () => {
+            const result = converter.toDurationFromMillis(2011.506776);
+            expect(result.seconds).to.equal(BigInt(2));
+            expect(result.nanos).to.equal(11506776);
+        });
+
+        it("should convert 2011.50677699 milliseconds to 2 seconds and 11506776 nanos", () => {
+            const result = converter.toDurationFromMillis(2011.50677699);
+            expect(result.seconds).to.equal(BigInt(2));
+            expect(result.nanos).to.equal(11506776);
+        });
+    });
+
+
     describe("toDurationString", () => {
         it("should convert with empty string", () => {
             expect(converter.toDurationString(new Duration())).to.equal("");
@@ -267,10 +352,11 @@ describe("PublicAPIConverter", () => {
         it("should convert", () => {
             const result = converter.toOnboardingState({
                 isCompleted: true,
-                hasAnyOrg: true,
+                organizationCountTotal: 1,
             });
             expect(result).to.deep.equal({
                 completed: true,
+                organizationCountTotal: 1,
             });
         });
     });
@@ -341,6 +427,8 @@ describe("PublicAPIConverter", () => {
                     lastUpdate: "2021-06-28T10:48:28Z",
                     owner: "akosyakov",
                     userIsOwner: true,
+                    repoName: "gitpod",
+                    errorMessage: "Repository not found.",
                     userScopes: ["repo"],
                 }),
             );
@@ -376,7 +464,11 @@ describe("PublicAPIConverter", () => {
             const connectError = converter.toError(
                 new UnauthorizedRepositoryAccessError({
                     host: "github.com",
-                    scopes: ["repo"],
+                    requiredScopes: ["repo"],
+                    providerIsConnected: false,
+                    providerType: "GitHub",
+                    repoName: "rocket",
+                    isMissingScopes: true,
                 }),
             );
             expect(connectError.code).to.equal(Code.FailedPrecondition);
@@ -387,18 +479,22 @@ describe("PublicAPIConverter", () => {
             expect(details?.reason?.case).to.equal("repositoryUnauthorized");
             expect(details?.reason?.value).to.be.instanceOf(RepositoryUnauthorizedErrorData);
 
-            let data = toPlainMessage(details?.reason?.value as RepositoryUnauthorizedErrorData);
+            const data = toPlainMessage(details?.reason?.value as RepositoryUnauthorizedErrorData);
             expect(data.host).to.equal("github.com");
-            expect(data.scopes).to.deep.equal(["repo"]);
+            expect(data.requiredScopes).to.deep.equal(["repo"]);
 
             const appError = converter.fromError(connectError);
             expect(appError).to.be.instanceOf(UnauthorizedRepositoryAccessError);
             expect(appError.code).to.equal(ErrorCodes.NOT_AUTHENTICATED);
             expect(appError.message).to.equal("Repository unauthorized.");
 
-            data = (appError as UnauthorizedRepositoryAccessError).info;
-            expect(data.host).to.equal("github.com");
-            expect(data.scopes).to.deep.equal(["repo"]);
+            const info = (appError as UnauthorizedRepositoryAccessError).info;
+            expect(info.host).to.equal("github.com");
+            expect(info.requiredScopes).to.deep.equal(["repo"]);
+            expect(info.providerIsConnected).to.equal(false);
+            expect(info.providerType).to.equal("GitHub");
+            expect(info.repoName).to.equal("rocket");
+            expect(info.isMissingScopes).to.equal(true);
         });
 
         it("PAYMENT_SPENDING_LIMIT_REACHED", () => {

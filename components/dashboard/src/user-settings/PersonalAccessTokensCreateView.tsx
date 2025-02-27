@@ -5,29 +5,33 @@
  */
 
 import { PersonalAccessToken } from "@gitpod/public-api/lib/gitpod/experimental/v1/tokens_pb";
-import dayjs from "dayjs";
-import { useEffect, useState } from "react";
-import { Redirect, useHistory, useParams } from "react-router";
+import { useEffect, useMemo, useState } from "react";
+import { useHistory, useParams } from "react-router";
 import Alert from "../components/Alert";
-import { CheckboxInputField, CheckboxListField } from "../components/forms/CheckboxInputField";
 import DateSelector from "../components/DateSelector";
 import { SpinnerOverlayLoader } from "../components/Loader";
 import { personalAccessTokensService } from "../service/public-api";
 import { PageWithSettingsSubMenu } from "./PageWithSettingsSubMenu";
-import { AllPermissions, TokenAction, TokenExpirationDays, TokenInfo } from "./PersonalAccessTokens";
+import {
+    AllPermissions,
+    TokenAction,
+    getTokenExpirationDays,
+    TokenInfo,
+    getTokenExpirationDescription,
+} from "./PersonalAccessTokens";
 import { settingsPathPersonalAccessTokens } from "./settings.routes";
 import ShowTokenModal from "./ShowTokenModal";
 import { Timestamp } from "@bufbuild/protobuf";
 import arrowDown from "../images/sort-arrow.svg";
 import { Heading2, Subheading } from "../components/typography/headings";
-import { useFeatureFlag } from "../data/featureflag-query";
+import { useIsDataOps } from "../data/featureflag-query";
 import { LinkButton } from "@podkit/buttons/LinkButton";
 import { Button } from "@podkit/buttons/Button";
 import { TextInputField } from "../components/forms/TextInputField";
 
 interface EditPATData {
     name: string;
-    expirationDays: string;
+    expirationValue: string;
     expirationDate: Date;
     scopes: Set<string>;
 }
@@ -35,8 +39,6 @@ interface EditPATData {
 const personalAccessTokenNameRegex = /^[a-zA-Z0-9-_ ]{3,63}$/;
 
 function PersonalAccessTokenCreateView() {
-    const enablePersonalAccessTokens = useFeatureFlag("personalAccessTokensEnabled");
-
     const params = useParams<{ tokenId?: string }>();
     const history = useHistory<TokenInfo>();
 
@@ -45,9 +47,9 @@ function PersonalAccessTokenCreateView() {
     const [editToken, setEditToken] = useState<PersonalAccessToken>();
     const [token, setToken] = useState<EditPATData>({
         name: "",
-        expirationDays: "30",
-        expirationDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        scopes: new Set<string>(),
+        expirationValue: "30 Days",
+        expirationDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // default option 30 days
+        scopes: new Set<string>(AllPermissions[0].scopes), // default to all permissions
     });
     const [modalData, setModalData] = useState<{ token: PersonalAccessToken }>();
 
@@ -59,6 +61,9 @@ function PersonalAccessTokenCreateView() {
             state: tokenInfo,
         });
     }
+
+    const isDataOps = useIsDataOps();
+    const TokenExpirationDays = useMemo(() => getTokenExpirationDays(isDataOps), [isDataOps]);
 
     useEffect(() => {
         (async () => {
@@ -85,8 +90,9 @@ function PersonalAccessTokenCreateView() {
     }, []);
 
     const update = (change: Partial<EditPATData>, addScopes?: string[], removeScopes?: string[]) => {
-        if (change.expirationDays) {
-            change.expirationDate = new Date(Date.now() + Number(change.expirationDays) * 24 * 60 * 60 * 1000);
+        if (change.expirationValue) {
+            const found = TokenExpirationDays.find((e) => e.value === change.expirationValue);
+            change.expirationDate = found?.getDate();
         }
         const data = { ...token, ...change };
         if (addScopes) {
@@ -146,10 +152,6 @@ function PersonalAccessTokenCreateView() {
         }
     };
 
-    if (!enablePersonalAccessTokens) {
-        return <Redirect to="/" />;
-    }
-
     return (
         <div>
             <PageWithSettingsSubMenu>
@@ -167,6 +169,12 @@ function PersonalAccessTokenCreateView() {
                 {errorMsg.length > 0 && (
                     <Alert type="error" className="mb-2 max-w-md">
                         {errorMsg}
+                    </Alert>
+                )}
+                {!editToken && (
+                    <Alert type={"warning"} closable={false} showIcon={true} className="my-4 max-w-lg">
+                        This token will have complete read / write access to the API. Use it responsibly and revoke it
+                        if necessary.
                     </Alert>
                 )}
                 {modalData && (
@@ -213,37 +221,14 @@ function PersonalAccessTokenCreateView() {
                             {!isEditing && (
                                 <DateSelector
                                     title="Expiration Date"
-                                    description={`The token will expire on ${dayjs(token.expirationDate).format(
-                                        "MMM D, YYYY",
-                                    )}`}
+                                    description={getTokenExpirationDescription(token.expirationDate)}
                                     options={TokenExpirationDays}
-                                    value={TokenExpirationDays.find((i) => i.value === token.expirationDays)?.value}
+                                    value={TokenExpirationDays.find((i) => i.value === token.expirationValue)?.value}
                                     onChange={(value) => {
-                                        update({ expirationDays: value });
+                                        update({ expirationValue: value });
                                     }}
                                 />
                             )}
-                            <div>
-                                <CheckboxListField label="Permission">
-                                    {AllPermissions.map((item) => (
-                                        <CheckboxInputField
-                                            key={item.name}
-                                            value={item.name}
-                                            label={item.name}
-                                            hint={item.description}
-                                            checked={item.scopes.every((s) => token.scopes.has(s))}
-                                            topMargin={false}
-                                            onChange={(checked) => {
-                                                if (checked) {
-                                                    update({}, item.scopes);
-                                                } else {
-                                                    update({}, undefined, item.scopes);
-                                                }
-                                            }}
-                                        />
-                                    ))}
-                                </CheckboxListField>
-                            </div>
                         </div>
                     </div>
                     <div className="flex gap-2">

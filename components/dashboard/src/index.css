@@ -16,6 +16,9 @@
         /* Setup RGB color channel variables */
         --black: 22 22 22; /* #161616 */
         --white: 255 255 255; /* #FFFFFF */
+        /* TODO: determine if these are the reds we want - need to have correct contrast */
+        --red-600: 220 38 38;
+        --red-400: 248 68 68;
         --gray-900: 18 16 12; /* #12100C */
         --gray-850: 21 19 16; /* #151310 */
         --gray-800: 35 33 30; /* #23211E */
@@ -36,7 +39,8 @@
         --content-tertiary: var(--gray-400);
         --content-disabled: var(--gray-450);
         --content-invert-primary: var(--gray-200);
-        --content-invert-secondary: var(--gray-300);
+        --content-invert-secondary: var(--gray-400);
+        --content-danger: var(--red-600);
 
         /* Surfaces */
         --surface-primary: var(--white);
@@ -44,9 +48,13 @@
         --surface-tertiary: var(--gray-100);
         --surface-labels: var(--gray-200);
         --surface-invert: var(--gray-850);
+        --surface-01: var(--dark-surface-01);
 
         /* Borders */
         --border-base: var(--gray-200);
+        --border-light: var(--gray-100);
+        --border-strong: var(--gray-500);
+        --border-invert: var(--gray-600);
     }
 
     /* Dark mode color adjustments */
@@ -57,7 +65,8 @@
         --content-tertiary: var(--gray-500);
         --content-disabled: var(--gray-600);
         --content-invert-primary: var(--gray-900);
-        --content-invert-secondary: var(--gray-600);
+        --content-invert-secondary: var(--gray-450);
+        --content-danger: var(--red-400);
 
         /* Surfaces */
         --surface-primary: var(--gray-850);
@@ -65,9 +74,13 @@
         --surface-tertiary: var(--gray-750);
         --surface-labels: var(--gray-700);
         --surface-invert: var(--gray-50);
+        --surface-01: var(--gray-100);
 
         /* Borders */
         --border-base: var(--gray-700);
+        --border-light: var(--gray-800);
+        --border-strong: var(--gray-500);
+        --border-invert: var(--gray-400);
     }
 
     html,
@@ -82,7 +95,7 @@
         margin: 0 auto !important;
     }
     p {
-        @apply text-sm text-gray-400 dark:text-gray-600;
+        @apply text-sm text-pk-content-secondary;
     }
 
     .app-container {
@@ -105,7 +118,7 @@
     }
 
     code {
-        @apply bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded-md text-sm font-mono font-medium;
+        @apply bg-gray-100 dark:bg-gray-800 text-pk-content-primary px-1.5 py-0.5 rounded-md text-sm font-mono font-medium;
     }
 
     textarea,

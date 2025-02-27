@@ -18,6 +18,8 @@ import {
     WatchPrebuildResponse,
     CancelPrebuildRequest,
     CancelPrebuildResponse,
+    ListOrganizationPrebuildsRequest,
+    ListOrganizationPrebuildsResponse,
 } from "@gitpod/public-api/lib/gitpod/v1/prebuild_pb";
 import { getGitpodService } from "./service";
 import { converter } from "./public-api";
@@ -48,6 +50,10 @@ export class JsonRpcPrebuildClient implements PromiseClient<typeof PrebuildServi
         return new CancelPrebuildResponse();
     }
 
+    get gitpodHost(): string {
+        return window.location.protocol + "//" + window.location.host;
+    }
+
     async getPrebuild(
         request: PartialMessage<GetPrebuildRequest>,
         options?: CallOptions,
@@ -60,7 +66,7 @@ export class JsonRpcPrebuildClient implements PromiseClient<typeof PrebuildServi
             throw new ApplicationError(ErrorCodes.NOT_FOUND, `prebuild ${request.prebuildId} not found`);
         }
         return new GetPrebuildResponse({
-            prebuild: converter.toPrebuild(result),
+            prebuild: converter.toPrebuild(this.gitpodHost, result),
         });
     }
 
@@ -74,7 +80,7 @@ export class JsonRpcPrebuildClient implements PromiseClient<typeof PrebuildServi
                 const prebuild = await getGitpodService().server.getPrebuild(pbws.id);
                 if (prebuild) {
                     return new ListPrebuildsResponse({
-                        prebuilds: [converter.toPrebuild(prebuild)],
+                        prebuilds: [converter.toPrebuild(this.gitpodHost, prebuild)],
                     });
                 }
             }
@@ -91,7 +97,7 @@ export class JsonRpcPrebuildClient implements PromiseClient<typeof PrebuildServi
             limit: request.pagination?.pageSize || undefined,
         });
         return new ListPrebuildsResponse({
-            prebuilds: converter.toPrebuilds(result),
+            prebuilds: converter.toPrebuilds(this.gitpodHost, result),
         });
     }
 
@@ -136,10 +142,16 @@ export class JsonRpcPrebuildClient implements PromiseClient<typeof PrebuildServi
             } else if (pb.info.projectId !== request.scope.value) {
                 continue;
             }
-            const prebuild = converter.toPrebuild(pb);
+            const prebuild = converter.toPrebuild(this.gitpodHost, pb);
             if (prebuild) {
                 yield new WatchPrebuildResponse({ prebuild });
             }
         }
+    }
+
+    async listOrganizationPrebuilds(
+        request: PartialMessage<ListOrganizationPrebuildsRequest>,
+    ): Promise<ListOrganizationPrebuildsResponse> {
+        throw new ApplicationError(ErrorCodes.UNIMPLEMENTED, "Not implemented (for jrpc)");
     }
 }

@@ -27,7 +27,8 @@
         },
         "editorSettings": {
             "name": "code",
-            "version": "latest"
+            "version": "latest",
+            "preferToolbox": true
         },
         "dotfileRepo": "https://github.com/gitpod-samples/demo-dotfiles-with-gitpod",
         "workspaceClass": "XXXL",
@@ -48,7 +49,8 @@
             ],
             "signupGoalsOther": "",
             "onboardedTimestamp": "2023-12-04T08:54:41.326Z",
-            "companySize": ""
+            "companySize": "",
+            "coachmarksDismissals": {}
         },
         "workspaceAutostartOptions": [
             {
@@ -57,7 +59,8 @@
                 "workspaceClass": "XXXL",
                 "editorSettings": {
                     "name": "code",
-                    "version": "stable"
+                    "version": "stable",
+                    "preferToolbox": false
                 },
                 "region": ""
             }

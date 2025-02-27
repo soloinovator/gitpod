@@ -178,6 +178,7 @@ export interface GitpodServer extends JsonRpcServer<GitpodClient>, AdminServer, 
     deleteTeam(teamId: string): Promise<void>;
     getOrgSettings(orgId: string): Promise<OrganizationSettings>;
     updateOrgSettings(teamId: string, settings: Partial<OrganizationSettings>): Promise<OrganizationSettings>;
+    getOrgWorkspaceClasses(orgId: string): Promise<SupportedWorkspaceClass[]>;
 
     getDefaultWorkspaceImage(params: GetDefaultWorkspaceImageParams): Promise<GetDefaultWorkspaceImageResult>;
 
@@ -254,6 +255,7 @@ export interface GitpodServer extends JsonRpcServer<GitpodClient>, AdminServer, 
     getCostCenter(attributionId: string): Promise<CostCenterJSON | undefined>;
     setUsageLimit(attributionId: string, usageLimit: number): Promise<void>;
     getUsageBalance(attributionId: string): Promise<number>;
+    isCustomerBillingAddressInvalid(attributionId: string): Promise<boolean>;
 
     listUsage(req: ListUsageRequest): Promise<ListUsageResponse>;
 
@@ -309,8 +311,6 @@ export interface GetDefaultWorkspaceImageResult {
 
 export interface CreateProjectParams {
     name: string;
-    /** @deprecated unused */
-    slug: string;
     cloneUrl: string;
     teamId: string;
     appInstallationId: string;
@@ -367,7 +367,7 @@ export namespace WorkspaceTimeoutDuration {
         ) {
             throw new Error("Workspace inactivity timeout cannot exceed 24h");
         }
-        return duration;
+        return value + unit;
     }
 }
 
@@ -376,6 +376,9 @@ export const WORKSPACE_TIMEOUT_DEFAULT_LONG: WorkspaceTimeoutDuration = "60m";
 export const WORKSPACE_TIMEOUT_EXTENDED: WorkspaceTimeoutDuration = "180m";
 export const WORKSPACE_LIFETIME_SHORT: WorkspaceTimeoutDuration = "8h";
 export const WORKSPACE_LIFETIME_LONG: WorkspaceTimeoutDuration = "36h";
+
+export const MAX_PARALLEL_WORKSPACES_FREE = 4;
+export const MAX_PARALLEL_WORKSPACES_PAID = 16;
 
 export const createServiceMock = function <C extends GitpodClient, S extends GitpodServer>(
     methods: Partial<JsonRpcProxy<S>>,
@@ -489,11 +492,10 @@ export namespace GitpodServer {
          * Whether this Gitpod instance is already configured with SSO.
          */
         readonly isCompleted: boolean;
-
         /**
-         * Whether this Gitpod instance has at least one org.
+         * Total number of organizations.
          */
-        readonly hasAnyOrg: boolean;
+        readonly organizationCountTotal: number;
     }
 }
 

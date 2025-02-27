@@ -17,6 +17,8 @@ import { expectError } from "../test/expect-utils";
 import { createTestContainer, withTestCtx } from "../test/service-testing-container-module";
 import { OldProjectSettings, ProjectsService } from "./projects-service";
 import { daysBefore } from "@gitpod/gitpod-protocol/lib/util/timeutil";
+import { SYSTEM_USER } from "../authorization/authorizer";
+import { EnvVarService } from "../user/env-var-service";
 
 const expect = chai.expect;
 
@@ -30,9 +32,7 @@ describe("ProjectsService", async () => {
 
     beforeEach(async () => {
         container = createTestContainer();
-        Experiments.configureTestingClient({
-            centralizedPermissions: true,
-        });
+        Experiments.configureTestingClient({});
         const userDB = container.get<UserDB>(UserDB);
 
         // create the owner
@@ -46,10 +46,10 @@ describe("ProjectsService", async () => {
         // create and add a member
         member = await userDB.newUser();
         const invite = await orgService.getOrCreateInvite(owner.id, org.id);
-        await orgService.joinOrganization(member.id, invite.id);
+        await withTestCtx(SYSTEM_USER, () => orgService.joinOrganization(member.id, invite.id));
 
         const anotherInvite = await orgService.getOrCreateInvite(owner.id, anotherOrg.id);
-        await orgService.joinOrganization(member.id, anotherInvite.id);
+        await withTestCtx(SYSTEM_USER, () => orgService.joinOrganization(member.id, anotherInvite.id));
 
         // create a stranger
         stranger = await userDB.newUser();
@@ -58,6 +58,8 @@ describe("ProjectsService", async () => {
     afterEach(async () => {
         // Clean-up database
         await resetDB(container.get(TypeORM));
+        // Deactivate all services
+        await container.unbindAllAsync();
     });
 
     it("should getProject and getProjects", async () => {
@@ -90,24 +92,52 @@ describe("ProjectsService", async () => {
 
         const foundProject = await ps.getProject(stranger.id, project.id);
         expect(foundProject?.id).to.equal(project.id);
-        // listing by org still doesn't woprk because strangers don't have access to the org
+        // listing by org still doesn't work because strangers don't have access to the org
         await expectError(ErrorCodes.NOT_FOUND, () => ps.getProjects(stranger.id, org.id));
     });
 
     it("should deleteProject", async () => {
         const ps = container.get(ProjectsService);
+        const evs = container.get(EnvVarService);
+        const pdb = container.get<ProjectDB>(ProjectDB);
         const project1 = await createTestProject(ps, org, owner);
+        await evs.addProjectEnvVar(member.id, project1.id, {
+            name: "key",
+            value: "value",
+            censored: false,
+        });
 
-        await ps.deleteProject(member.id, project1.id);
+        expect(await pdb.getProjectEnvironmentVariables(project1.id)).to.have.lengthOf(1);
+
+        await withTestCtx(member, () => ps.deleteProject(member.id, project1.id));
         let projects = await ps.getProjects(member.id, org.id);
         expect(projects.length).to.equal(0);
+        // have to use db directly to verify the env vars are really deleted, the env var service would throw with project not found.
+        expect(await pdb.getProjectEnvironmentVariables(project1.id)).to.have.lengthOf(0);
 
         const project2 = await createTestProject(ps, org, owner);
-        await expectError(ErrorCodes.NOT_FOUND, () => ps.deleteProject(stranger.id, project2.id));
+        await withTestCtx(stranger, () =>
+            expectError(ErrorCodes.NOT_FOUND, () => ps.deleteProject(stranger.id, project2.id)),
+        );
 
-        await ps.deleteProject(owner.id, project2.id);
+        await withTestCtx(owner, () => ps.deleteProject(owner.id, project2.id));
         projects = await ps.getProjects(owner.id, org.id);
         expect(projects.length).to.equal(0);
+    });
+
+    it("should remove project from org onboarding recommendations when deleted", async () => {
+        const ps = container.get(ProjectsService);
+        const project = await createTestProject(ps, org, owner);
+        const organizationService = container.get(OrganizationService);
+        const recommendations = await organizationService.updateSettings(owner.id, org.id, {
+            onboardingSettings: {
+                recommendedRepositories: [project.id],
+            },
+        });
+        expect(recommendations.onboardingSettings?.recommendedRepositories).to.deep.equal([project.id]);
+        await withTestCtx(owner, () => ps.deleteProject(owner.id, project.id));
+        const recommendationsAfterDelete = await organizationService.getSettings(owner.id, org.id);
+        expect(recommendationsAfterDelete.onboardingSettings?.recommendedRepositories).to.deep.equal([]);
     });
 
     it("should updateProject", async () => {
@@ -164,41 +194,6 @@ describe("ProjectsService", async () => {
                 },
             }),
         );
-    });
-
-    describe("enablePrebuild handling", async () => {
-        it("should install webhook on new projects", async () => {
-            const webhooks = container.get<Set<String>>("webhooks");
-            webhooks.clear();
-            const ps = container.get(ProjectsService);
-            const project = await createTestProject(ps, org, owner); // using new default settings
-            await ps.updateProject(owner, {
-                id: project.id,
-                settings: {
-                    prebuilds: { enable: true },
-                },
-            });
-            expect(webhooks).to.contain(project.cloneUrl);
-        });
-
-        it("should install webhook on pre-existing projects", async () => {
-            const webhooks = container.get<Set<String>>("webhooks");
-            webhooks.clear();
-            const cloneUrl = "https://github.com/gitpod-io/gitpod.git";
-            const ps = container.get(ProjectsService);
-            const project = await createTestProject(ps, org, owner, {
-                name: "test-pro",
-                cloneUrl,
-                settings: {},
-            });
-            await ps.updateProject(owner, {
-                id: project.id,
-                settings: {
-                    prebuilds: { enable: true },
-                },
-            });
-            expect(webhooks).to.contain(project.cloneUrl);
-        });
     });
 
     it("should findProjects", async () => {
@@ -296,6 +291,7 @@ describe("ProjectsService", async () => {
                 workspaceClass: "ultra",
                 branchStrategy: "matched-branches",
                 branchMatchingPattern: "feature-*",
+                triggerStrategy: "activity-based",
             },
             workspaceClasses: {},
         });
@@ -340,7 +336,6 @@ describe("ProjectsService", async () => {
         let project = await ps.createProject(
             {
                 name: partial.name!,
-                slug: "deprecated",
                 teamId: org.id,
                 cloneUrl: partial.cloneUrl!,
                 appInstallationId: "noid",

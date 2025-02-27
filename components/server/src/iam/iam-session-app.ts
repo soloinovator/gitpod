@@ -16,7 +16,6 @@ import { reportJWTCookieIssued } from "../prometheus-metrics";
 import { ApplicationError } from "@gitpod/gitpod-protocol/lib/messaging/error";
 import { OrganizationService } from "../orgs/organization-service";
 import { UserService } from "../user/user-service";
-import { BUILTIN_INSTLLATION_ADMIN_USER_ID, TeamDB, UserDB } from "@gitpod/gitpod-db/lib";
 import { SYSTEM_USER, SYSTEM_USER_ID } from "../authorization/authorizer";
 import { runWithSubjectId, runWithRequestContext } from "../util/request-context";
 
@@ -29,8 +28,6 @@ export class IamSessionApp {
         @inject(UserService) private readonly userService: UserService,
         @inject(OrganizationService) private readonly orgService: OrganizationService,
         @inject(SessionHandler) private readonly session: SessionHandler,
-        @inject(UserDB) private readonly userDb: UserDB,
-        @inject(TeamDB) private readonly teamDb: TeamDB,
     ) {}
 
     public getMiddlewares() {
@@ -85,17 +82,13 @@ export class IamSessionApp {
                 //TODO we need to fix users without a team membership that happened because of a bug in the past
                 // this is a workaround to fix the issue for now, but should be removed after a while
                 if (existingUser.organizationId) {
-                    const result = await this.teamDb.addMemberToTeam(existingUser.id, existingUser.organizationId);
-                    if (result === "added") {
-                        const teamMemberships = await this.teamDb.findMembersByTeam(existingUser.organizationId);
-                        const otherOwners = teamMemberships.filter(
-                            (tm) => tm.userId !== BUILTIN_INSTLLATION_ADMIN_USER_ID && tm.role !== "member",
-                        );
-                        // if there is no owner on the team besides the admin user, we make this user an owner
-                        if (otherOwners.length === 0) {
-                            await this.teamDb.setTeamMemberRole(existingUser.id, existingUser.organizationId, "owner");
-                        }
-                    }
+                    await this.orgService.addOrUpdateMember(
+                        SYSTEM_USER_ID,
+                        existingUser.organizationId,
+                        existingUser.id,
+                        "member",
+                        { flexibleRole: true, skipRoleUpdate: true },
+                    );
                 }
             } catch (error) {
                 log.error("Error fixing user team membership", error);
@@ -172,23 +165,15 @@ export class IamSessionApp {
     private async createNewOIDCUser(payload: OIDCCreateSessionPayload): Promise<User> {
         const { claims, organizationId } = payload;
 
-        return this.userDb.transaction(async (_, ctx) => {
-            // Until we support SKIM (or any other means to sync accounts) we create new users here as a side-effect of the login
-            const user = await this.userService.createUser(
-                {
-                    organizationId,
-                    identity: { ...this.mapOIDCProfileToIdentity(payload), lastSigninTime: new Date().toISOString() },
-                    userUpdate: (user) => {
-                        user.fullName = claims.name;
-                        user.name = claims.name;
-                        user.avatarUrl = claims.picture;
-                    },
-                },
-                ctx,
-            );
-
-            await this.orgService.addOrUpdateMember(SYSTEM_USER_ID, organizationId, user.id, "member", ctx);
-            return user;
+        // Until we support SKIM (or any other means to sync accounts) we create new users here as a side-effect of the login
+        return this.orgService.createOrgOwnedUser({
+            organizationId,
+            identity: { ...this.mapOIDCProfileToIdentity(payload), lastSigninTime: new Date().toISOString() },
+            userUpdate: (user) => {
+                user.fullName = claims.name;
+                user.name = claims.name;
+                user.avatarUrl = claims.picture;
+            },
         });
     }
 }

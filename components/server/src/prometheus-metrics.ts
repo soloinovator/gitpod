@@ -85,6 +85,8 @@ type LoginCounterStatus =
     | "failed"
     // The login attempt succeeded
     | "succeeded"
+    // The login was successful, but we need to defer cookie creation via an OTS
+    | "succeeded_via_ots"
     // The login attempt failed, because the client failed to provide complete session information, for instance.
     | "failed_client";
 
@@ -203,6 +205,7 @@ export type FailedInstanceStartReason =
     | "startOnClusterFailed"
     | "imageBuildFailed"
     | "imageBuildFailedUser"
+    | "scmAccessFailed"
     | "resourceExhausted"
     | "workspaceClusterMaintenance"
     | "other";
@@ -279,11 +282,11 @@ export function reportJobStarted(name: string) {
 export const jobsCompletedTotal = new prometheusClient.Counter({
     name: "gitpod_server_jobs_completed_total",
     help: "Total number of errors caught by an error boundary in the dashboard",
-    labelNames: ["name", "success"],
+    labelNames: ["name", "success", "unitsOfWork"],
 });
 
-export function reportJobCompleted(name: string, success: boolean) {
-    jobsCompletedTotal.inc({ name, success: String(success) });
+export function reportJobCompleted(name: string, success: boolean, unitsOfWork?: number | undefined) {
+    jobsCompletedTotal.inc({ name, success: String(success), unitsOfWork: String(unitsOfWork) });
 }
 
 export const jobsDurationSeconds = new prometheusClient.Histogram({
@@ -380,3 +383,32 @@ type AuthorizerSubjectIdMatch = "ctx-user-id-missing" | "passed-subject-id-missi
 export function reportAuthorizerSubjectId(match: AuthorizerSubjectIdMatch) {
     authorizerSubjectId.labels(match).inc();
 }
+
+export const scmTokenRefreshRequestsTotal = new prometheusClient.Counter({
+    name: "gitpod_scm_token_refresh_requests_total",
+    help: "Counter for the number of token refresh requests we issue against SCM systems",
+    labelNames: ["host", "result", "opportunisticRefresh"],
+});
+export type ScmTokenRefreshResult =
+    | "success"
+    | "timeout"
+    | "error"
+    | "still_valid"
+    | "no_token"
+    | "not_refreshable"
+    | "success_after_timeout";
+export type OpportunisticRefresh = "true" | "false" | "reserved";
+export function reportScmTokenRefreshRequest(
+    host: string,
+    opportunisticRefresh: OpportunisticRefresh,
+    result: ScmTokenRefreshResult,
+) {
+    scmTokenRefreshRequestsTotal.labels(host, result, opportunisticRefresh).inc();
+}
+
+export const scmTokenRefreshLatencyHistogram = new prometheusClient.Histogram({
+    name: "gitpod_scm_token_refresh_latency_seconds",
+    help: "SCM token refresh latency in seconds",
+    labelNames: ["host"],
+    buckets: [0.01, 0.1, 0.2, 0.5, 1, 2, 5, 10],
+});

@@ -7,6 +7,7 @@ import "gitpod/v1/sorting.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/gitpod-io/gitpod/components/public-api/go/v1";
+option java_package = "io.gitpod.publicapi.v1";
 
 message Configuration {
   string id = 1;
@@ -18,12 +19,26 @@ message Configuration {
   WorkspaceSettings workspace_settings = 7;
 }
 
+enum PrebuildTriggerStrategy {
+  // Default value. Implicitly applies to webhoook-based activation
+  PREBUILD_TRIGGER_STRATEGY_UNSPECIFIED = 0;
+  // Default value for newly enabled prebuilds.
+  PREBUILD_TRIGGER_STRATEGY_ACTIVITY_BASED = 1;
+}
+
 message PrebuildSettings {
   bool enabled = 1;
   string branch_matching_pattern = 2;
   BranchMatchingStrategy branch_strategy = 3;
   int32 prebuild_interval = 4;
   string workspace_class = 5;
+  PrebuildTriggerStrategy trigger_strategy = 6;
+  PrebuildCloneSettings clone_settings = 7;
+}
+
+message PrebuildCloneSettings {
+  // full_clone determines if the entire repository should be cloned, instead of with `--depth=1`
+  bool full_clone = 1;
 }
 
 enum BranchMatchingStrategy {
@@ -35,6 +50,10 @@ enum BranchMatchingStrategy {
 
 message WorkspaceSettings {
   string workspace_class = 1;
+  repeated string restricted_workspace_classes = 2;
+  repeated string restricted_editor_names = 3;
+  // Enable automatic authentication for docker daemon with all credentials specified in GITPOD_IMAGE_AUTH
+  bool enable_dockerd_authentication = 4;
 }
 
 service ConfigurationService {
@@ -94,9 +113,29 @@ message UpdateConfigurationRequest {
     optional BranchMatchingStrategy branch_strategy = 3;
     optional int32 prebuild_interval = 4;
     optional string workspace_class = 5;
+    optional PrebuildTriggerStrategy trigger_strategy = 6;
+    optional PrebuildCloneSettings clone_settings = 7;
   }
   message WorkspaceSettings {
     optional string workspace_class = 1;
+
+    // restricted_workspace_classes specifies the workspace classes that are NOT allowed to be used in this configuration.
+    // If empty, all workspace classes are allowed.
+    // Only updates if update_restricted_workspace_classes is true.
+    repeated string restricted_workspace_classes = 2;
+
+    // Specifies whether restricted_workspace_classes should be updated.
+    optional bool update_restricted_workspace_classes = 3;
+
+    // restricted_editor_names specifies the editor names that are NOT allowed to be used in this configuration.
+    // If empty, all editors are allowed.
+    // Only updates if update_restricted_editor_names is true.
+    repeated string restricted_editor_names = 4;
+    // Specifies whether restricted_editor_names should be updated.
+    optional bool update_restricted_editor_names = 5;
+
+    // Enable automatic authentication for docker daemon with all credentials specified in GITPOD_IMAGE_AUTH
+    optional bool enable_dockerd_authentication = 6;
   }
   string configuration_id = 1;
   optional string name = 2;

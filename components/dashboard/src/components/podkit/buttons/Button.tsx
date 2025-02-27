@@ -10,14 +10,14 @@ import { cva, VariantProps } from "class-variance-authority";
 import { cn } from "@podkit/lib/cn";
 
 export const buttonVariants = cva(
-    "inline-flex items-center justify-center whitespace-nowrap rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+    "inline-flex items-center whitespace-nowrap rounded-lg text-sm justify-center font-medium transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
     {
         variants: {
             variant: {
                 default:
                     "bg-gray-900 hover:bg-gray-800 dark:bg-kumquat-base dark:hover:bg-kumquat-ripe text-gray-50 dark:text-gray-900",
                 destructive: "bg-red-600 hover:bg-red-700 text-gray-100 dark:text-red-100",
-                outline: "border border-input bg-transparent hover:bg-kumquat-ripe hover:text-gray-600",
+                outline: "border border-input bg-transparent hover:bg-pk-surface-secondary hover:text-gray-600",
                 secondary:
                     "bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500 dark:text-gray-100 hover:text-gray-600",
                 ghost: "bg-transparent hover:opacity-50",

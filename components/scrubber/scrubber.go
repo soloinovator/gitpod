@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"unsafe"
 
@@ -95,18 +96,47 @@ type Scrubber interface {
 	DeepCopyStruct(val any) any
 }
 
+type ScrubberImplConfig struct {
+	HashedFieldNames         []string
+	HashedURLPathsFieldNames []string
+	RedactedFieldNames       []string
+	HashedValues             map[string]*regexp.Regexp
+	RedactedValues           map[string]*regexp.Regexp
+}
+
+// CreateCustomScrubber creates a new scrubber with the given configuration
+// !!! Only use this if you know what you're doing. For all logging purposes, use the "Default" impl !!!
+func CreateCustomScrubber(cfg *ScrubberImplConfig) Scrubber {
+	return createScrubberImpl(cfg)
+}
+
 // Default is the default scrubber consumers of this package should use
 var Default Scrubber = newScrubberImpl()
 
 func newScrubberImpl() *scrubberImpl {
+	defaultCfg := ScrubberImplConfig{
+		HashedFieldNames:         HashedFieldNames,
+		HashedURLPathsFieldNames: HashedURLPathsFieldNames,
+		RedactedFieldNames:       RedactedFieldNames,
+		HashedValues:             HashedValues,
+		RedactedValues:           RedactedValues,
+	}
+	return createScrubberImpl(&defaultCfg)
+}
+
+func createScrubberImpl(cfg *ScrubberImplConfig) *scrubberImpl {
 	var (
-		lowerSanitiseHash   []string
-		lowerSanitiseRedact []string
+		lowerSanitiseHash         []string
+		lowerSanitiseHashURLPaths []string
+		lowerSanitiseRedact       []string
 	)
-	for _, v := range HashedFieldNames {
+	for _, v := range cfg.HashedFieldNames {
 		lowerSanitiseHash = append(lowerSanitiseHash, strings.ToLower(v))
 	}
-	for _, v := range RedactedFieldNames {
+	for _, v := range cfg.HashedURLPathsFieldNames {
+		lowerSanitiseHashURLPaths = append(lowerSanitiseHashURLPaths, strings.ToLower(v))
+	}
+	for _, v := range cfg.RedactedFieldNames {
 		lowerSanitiseRedact = append(lowerSanitiseRedact, strings.ToLower(v))
 	}
 
@@ -116,9 +146,12 @@ func newScrubberImpl() *scrubberImpl {
 	}
 
 	res := &scrubberImpl{
-		LowerSanitiseHash:   lowerSanitiseHash,
-		LowerSanitiseRedact: lowerSanitiseRedact,
-		KeySanitiserCache:   cache,
+		LowerSanitiseHash:         lowerSanitiseHash,
+		LowerSanitiseHashURLPaths: lowerSanitiseHashURLPaths,
+		LowerSanitiseRedact:       lowerSanitiseRedact,
+		HashedValues:              cfg.HashedValues,
+		RedactedValues:            cfg.RedactedValues,
+		KeySanitiserCache:         cache,
 	}
 	res.Walker = &structScrubber{Parent: res}
 
@@ -126,10 +159,13 @@ func newScrubberImpl() *scrubberImpl {
 }
 
 type scrubberImpl struct {
-	Walker              *structScrubber
-	LowerSanitiseHash   []string
-	LowerSanitiseRedact []string
-	KeySanitiserCache   *lru.Cache
+	Walker                    *structScrubber
+	LowerSanitiseHash         []string
+	LowerSanitiseHashURLPaths []string
+	LowerSanitiseRedact       []string
+	HashedValues              map[string]*regexp.Regexp
+	RedactedValues            map[string]*regexp.Regexp
+	KeySanitiserCache         *lru.Cache
 }
 
 // JSON implements Scrubber
@@ -164,9 +200,10 @@ type keySanitiser struct {
 }
 
 var (
-	sanitiseIgnore keySanitiser = keySanitiser{s: nil}
-	sanitiseHash   keySanitiser = keySanitiser{s: SanitiseHash}
-	sanitiseRedact keySanitiser = keySanitiser{s: SanitiseRedact}
+	sanitiseIgnore              keySanitiser = keySanitiser{s: nil}
+	sanitiseHash                keySanitiser = keySanitiser{s: SanitiseHash}
+	sanitiseHashURLPathSegments keySanitiser = keySanitiser{s: SanitiseHashURLPathSegments}
+	sanitiseRedact              keySanitiser = keySanitiser{s: SanitiseRedact}
 )
 
 // getSanitisatiser implements
@@ -182,6 +219,13 @@ func (s *scrubberImpl) getSanitisatiser(key string) Sanitisatiser {
 		if strings.Contains(lower, f) {
 			s.KeySanitiserCache.Add(lower, sanitiseRedact)
 			return SanitiseRedact
+		}
+	}
+	// Give sanitiseHashURLPathSegments precedence over sanitiseHash
+	for _, f := range s.LowerSanitiseHashURLPaths {
+		if strings.Contains(lower, f) {
+			s.KeySanitiserCache.Add(lower, sanitiseHashURLPathSegments)
+			return SanitiseHashURLPathSegments
 		}
 	}
 	for _, f := range s.LowerSanitiseHash {
@@ -344,6 +388,9 @@ func (s *scrubberImpl) deepCopyStruct(fieldName string, src reflect.Value, scrub
 		return dst
 
 	case reflect.Interface:
+		if src.IsNil() {
+			return src
+		}
 		dst := reflect.New(src.Elem().Type())
 		copied := s.deepCopyStruct(fieldName, src.Elem(), scrubTag, skipScrub)
 		dst.Elem().Set(copied)
@@ -400,12 +447,12 @@ func (s *scrubberImpl) scrubJsonSlice(val []interface{}) error {
 
 // Value implements Scrubber
 func (s *scrubberImpl) Value(value string) string {
-	for key, expr := range HashedValues {
+	for key, expr := range s.HashedValues {
 		value = expr.ReplaceAllStringFunc(value, func(s string) string {
 			return SanitiseHash(s, SanitiseWithKeyName(key))
 		})
 	}
-	for key, expr := range RedactedValues {
+	for key, expr := range s.RedactedValues {
 		value = expr.ReplaceAllStringFunc(value, func(s string) string {
 			return SanitiseRedact(s, SanitiseWithKeyName(key))
 		})
@@ -530,6 +577,9 @@ func (s *structScrubber) MapElem(m reflect.Value, k reflect.Value, v reflect.Val
 	if kind == reflect.Interface {
 		v = v.Elem()
 		kind = v.Kind()
+	}
+	if k.Kind() == reflect.Interface {
+		k = k.Elem()
 	}
 	if kind == reflect.String {
 		m.SetMapIndex(k, reflect.ValueOf(s.Parent.KeyValue(k.String(), v.String())))

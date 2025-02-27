@@ -46,9 +46,7 @@ describe("BearerAuth", () => {
 
     beforeEach(async () => {
         container = createTestContainer();
-        Experiments.configureTestingClient({
-            centralizedPermissions: true,
-        });
+        Experiments.configureTestingClient({});
         const oldConfig = container.get<Config>(Config);
         container.rebind(Config).toDynamicValue((ctx) => {
             return {
@@ -72,6 +70,8 @@ describe("BearerAuth", () => {
     afterEach(async () => {
         // Clean-up database
         await resetDB(container.get(TypeORM));
+        // Deactivate all services
+        await container.unbindAllAsync();
     });
 
     it("authExpressRequest should successfully authenticate BearerToken (PAT)", async () => {

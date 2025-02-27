@@ -22,6 +22,7 @@
 
 	servers {
 		protocols h1 h2 h2c
+		metrics
 	}
 }
 
@@ -142,6 +143,7 @@
 
 # TODO: refactor once we can listen only in localhost
 :9545 {
+
 	metrics /metrics {
 		disable_openmetrics
 	}
@@ -170,6 +172,15 @@ api.{$GITPOD_DOMAIN} {
 
 	gitpod.cors_origin {
 		allowed_origins https://{$GITPOD_DOMAIN}
+	}
+
+	@to_server path /auth/*/callback
+	handle @to_server {
+		import compression
+
+		reverse_proxy server.{$KUBE_NAMESPACE}.{$KUBE_DOMAIN}:3000 {
+			import upstream_connection
+		}
 	}
 
 	handle /gitpod.v1.* {
@@ -305,7 +316,7 @@ https://{$GITPOD_DOMAIN} {
 		}
 	}
 
-	@backend path /api/* /headless-logs/*
+	@backend path /api/* /headless-logs/* /prebuild-logs/*
 	handle @backend {
 		gitpod.cors_origin {
 			base_domain {$GITPOD_DOMAIN}

@@ -11,7 +11,7 @@ import { ReactComponent as InfoSvg } from "../images/info.svg";
 import { ReactComponent as XSvg } from "../images/x.svg";
 import { ReactComponent as Check } from "../images/check-circle.svg";
 import classNames from "classnames";
-import { Button } from "./Button";
+import { Button } from "@podkit/buttons/Button";
 
 export type AlertType =
     // Green
@@ -66,7 +66,7 @@ const infoMap: Record<AlertType, AlertInfo> = {
         bgCls: "bg-gray-100 dark:bg-gray-700",
         txtCls: "text-gray-500 dark:text-gray-300",
         icon: <InfoSvg className="w-4 h-4"></InfoSvg>,
-        iconColor: "text-gray-400",
+        iconColor: "text-gray-400 dark:text-gray-300",
     },
     message: {
         bgCls: "bg-blue-50 dark:bg-blue-800",
@@ -126,7 +126,7 @@ export default function Alert(props: AlertProps) {
                 <span className={`ml-4`}>
                     {/* Use an IconButton component once we make it */}
                     <Button
-                        type="transparent"
+                        variant="ghost"
                         className="hover:bg-transparent"
                         onClick={handleClose}
                         autoFocus={autoFocusClose}

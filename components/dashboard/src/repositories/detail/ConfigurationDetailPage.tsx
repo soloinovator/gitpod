@@ -6,7 +6,7 @@
 
 import { BreadcrumbNav } from "@podkit/breadcrumbs/BreadcrumbNav";
 import { Button } from "@podkit/buttons/Button";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { FC, useMemo } from "react";
 import Alert from "../../components/Alert";
 import { WidePageWithSubMenu } from "../../components/WidePageWithSubmenu";
@@ -18,17 +18,18 @@ import { ConfigurationDetailWorkspaces } from "./ConfigurationDetailWorkspaces";
 import { ConfigurationDetailPrebuilds } from "./ConfigurationDetailPrebuilds";
 import { ConfigurationVariableList } from "./variables/ConfigurationVariableList";
 import { useWorkspaceClasses } from "../../data/workspaces/workspace-classes-query";
+import { LoadingState } from "@podkit/loading/LoadingState";
+import { ConfigurationDetailEditors } from "./ConfigurationDetailEditors";
 
 type PageRouteParams = {
     id: string;
 };
-
 const ConfigurationDetailPage: FC = () => {
     // preload some data we may show
     useWorkspaceClasses();
 
     const { id } = useParams<PageRouteParams>();
-    let { path, url } = useRouteMatch();
+    const { path, url } = useRouteMatch();
 
     const { data, error, isLoading, refetch } = useConfiguration(id);
     const prebuildsEnabled = !!data?.prebuildSettings?.enabled;
@@ -40,7 +41,7 @@ const ConfigurationDetailPage: FC = () => {
                 link: [url],
             },
             {
-                title: "Prebuilds",
+                title: "Prebuild settings",
                 link: [`${url}/prebuilds`],
                 icon: !prebuildsEnabled ? <AlertTriangle size={20} /> : undefined,
             },
@@ -49,8 +50,12 @@ const ConfigurationDetailPage: FC = () => {
                 link: [`${url}/variables`],
             },
             {
-                title: "Workspace defaults",
+                title: "Workspace classes",
                 link: [`${url}/workspaces`],
+            },
+            {
+                title: "Workspace editors",
+                link: [`${url}/editors`],
             },
         ];
         return menu;
@@ -58,17 +63,13 @@ const ConfigurationDetailPage: FC = () => {
 
     return (
         <div className="w-full">
-            <BreadcrumbNav
-                pageTitle="Imported repositories"
-                pageDescription={data?.name ?? ""}
-                backLink="/repositories"
-            />
-            <WidePageWithSubMenu subMenu={settingsMenu} navTitle="Configuration Settings">
-                {isLoading && <Loader2 className="animate-spin" />}
+            <BreadcrumbNav pageTitle="Repositories" pageDescription={data?.name ?? ""} backLink="/repositories" />
+            <WidePageWithSubMenu subMenu={settingsMenu} navTitle="Repository settings">
+                {isLoading && <LoadingState />}
                 {error ? (
                     <div className="gap-4">
                         <Alert type="error">
-                            <span>Failed to load repository configuration</span>
+                            <span>Failed to load repository</span>
                             <pre>{error.message}</pre>
                         </Alert>
                         <Button
@@ -84,7 +85,7 @@ const ConfigurationDetailPage: FC = () => {
                     !isLoading &&
                     (!data ? (
                         // TODO: add a better not-found UI w/ link back to repositories
-                        <div>Sorry, we couldn't find that repository configuration.</div>
+                        <div>Sorry, we couldn't find this repository.</div>
                     ) : (
                         <div className="flex flex-col gap-4">
                             <Switch>
@@ -93,6 +94,9 @@ const ConfigurationDetailPage: FC = () => {
                                 </Route>
                                 <Route exact path={`${path}/workspaces`}>
                                     <ConfigurationDetailWorkspaces configuration={data} />
+                                </Route>
+                                <Route exact path={`${path}/editors`}>
+                                    <ConfigurationDetailEditors configuration={data} />
                                 </Route>
                                 <Route exact path={`${path}/prebuilds`}>
                                     <ConfigurationDetailPrebuilds configuration={data} />

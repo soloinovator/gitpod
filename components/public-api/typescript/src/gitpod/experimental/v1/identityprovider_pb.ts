@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2023 Gitpod GmbH. All rights reserved.
+ * Copyright (c) 2025 Gitpod GmbH. All rights reserved.
  * Licensed under the GNU Affero General Public License (AGPL).
  * See License.AGPL.txt in the project root for license information.
  */
@@ -26,6 +26,11 @@ export class GetIDTokenRequest extends Message<GetIDTokenRequest> {
    */
   audience: string[] = [];
 
+  /**
+   * @generated from field: string scope = 3;
+   */
+  scope = "";
+
   constructor(data?: PartialMessage<GetIDTokenRequest>) {
     super();
     proto3.util.initPartial(data, this);
@@ -36,6 +41,7 @@ export class GetIDTokenRequest extends Message<GetIDTokenRequest> {
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
     { no: 1, name: "workspace_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 2, name: "audience", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
+    { no: 3, name: "scope", kind: "scalar", T: 9 /* ScalarType.STRING */ },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): GetIDTokenRequest {

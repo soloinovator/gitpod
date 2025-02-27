@@ -4,73 +4,209 @@
  * See License.AGPL.txt in the project root for license information.
  */
 
-import { FC, useCallback, useMemo, useState } from "react";
+import { FC, useCallback, useEffect, useMemo, useState } from "react";
 import { Combobox, ComboboxElement, ComboboxSelectedItem } from "./podkit/combobox/Combobox";
 import RepositorySVG from "../icons/Repository.svg";
 import { ReactComponent as RepositoryIcon } from "../icons/RepositoryWithColor.svg";
+import GitpodRepositoryTemplateSVG from "../icons/GitpodRepositoryTemplate.svg";
 import { MiddleDot } from "./typography/MiddleDot";
-import { useUnifiedRepositorySearch } from "../data/git-providers/unified-repositories-search-query";
+import {
+    deduplicateAndFilterRepositories,
+    flattenPagedConfigurations,
+    useUnifiedRepositorySearch,
+} from "../data/git-providers/unified-repositories-search-query";
 import { useAuthProviderDescriptions } from "../data/auth-providers/auth-provider-descriptions-query";
 import { ReactComponent as Exclamation2 } from "../images/exclamation2.svg";
 import { AuthProviderType } from "@gitpod/public-api/lib/gitpod/v1/authprovider_pb";
 import { SuggestedRepository } from "@gitpod/public-api/lib/gitpod/v1/scm_pb";
+import { PREDEFINED_REPOS, PredefinedRepo } from "../data/git-providers/predefined-repos";
+import { useConfiguration, useListConfigurations } from "../data/configurations/configuration-queries";
+import { useUserLoader } from "../hooks/use-user-loader";
+import { conjunctScmProviders, getDeduplicatedScmProviders } from "../utils";
+import { cn } from "@podkit/lib/cn";
+import { useOrgSuggestedRepos } from "../data/organizations/suggested-repositories-query";
+import { toRemoteURL } from "../projects/render-utils";
 
-interface RepositoryFinderProps {
+const isPredefined = (repo: SuggestedRepository | PredefinedRepo): boolean => {
+    return (
+        PREDEFINED_REPOS.some((predefined) => predefined.url === repo.url) &&
+        !(repo as SuggestedRepository).configurationId
+    );
+};
+
+const resolveIcon = (contextUrl?: string): string => {
+    if (!contextUrl) return RepositorySVG;
+    return PREDEFINED_REPOS.some((repo) => repo.url === contextUrl) ? GitpodRepositoryTemplateSVG : RepositorySVG;
+};
+
+type PredefinedRepositoryOptionProps = {
+    repo: PredefinedRepo;
+};
+const PredefinedRepositoryOption: FC<PredefinedRepositoryOptionProps> = ({ repo }) => {
+    const prettyUrl = toRemoteURL(repo.url);
+    const icon = resolveIcon(repo.url);
+
+    return (
+        <div className="flex flex-col overflow-hidden" aria-label={`Demo: ${repo.url}`}>
+            <div className="flex items-center">
+                {repo.configurationId ? (
+                    <RepositoryIcon className={cn("w-5 mr-2 text-kumquat-ripe")} />
+                ) : (
+                    <img className={cn("w-5 mr-2 text-pk-content-secondary")} src={icon} alt="" />
+                )}
+
+                <span className="text-sm font-semibold">{repo.repoName}</span>
+                <MiddleDot className="px-0.5 text-pk-content-secondary" />
+                <span
+                    className="text-sm whitespace-nowrap truncate overflow-ellipsis text-pk-content-secondary"
+                    title={prettyUrl}
+                >
+                    {prettyUrl}
+                </span>
+            </div>
+            <span className="text-xs text-pk-content-secondary ml-7">{repo.description}</span>
+        </div>
+    );
+};
+
+type RepositoryFinderProps = {
     selectedContextURL?: string;
     selectedConfigurationId?: string;
     disabled?: boolean;
     expanded?: boolean;
-    excludeProjects?: boolean;
+    excludeConfigurations?: boolean;
+    onlyConfigurations?: boolean;
+    showExamples?: boolean;
     onChange?: (repo: SuggestedRepository) => void;
-}
-
+};
 export default function RepositoryFinder({
     selectedContextURL,
-    selectedConfigurationId: selectedProjectID,
+    selectedConfigurationId,
     disabled,
     expanded,
-    excludeProjects = false,
+    excludeConfigurations = false,
+    onlyConfigurations = false,
+    showExamples = false,
     onChange,
 }: RepositoryFinderProps) {
     const [searchString, setSearchString] = useState("");
+
+    const { user } = useUserLoader();
     const {
-        data: repos,
+        data: unifiedRepos,
         isLoading,
         isSearching,
         hasMore,
-    } = useUnifiedRepositorySearch({ searchString, excludeProjects });
+    } = useUnifiedRepositorySearch({
+        searchString,
+        excludeConfigurations,
+        onlyConfigurations,
+    });
+
+    const { data: orgSuggestedRepos } = useOrgSuggestedRepos();
+
+    // We search for the current context URL in order to have data for the selected suggestion
+    const selectedItemSearch = useListConfigurations({
+        sortBy: "name",
+        sortOrder: "desc",
+        pageSize: 30,
+        searchTerm: selectedContextURL,
+    });
+    const flattenedSelectedItem = useMemo(() => {
+        if (excludeConfigurations) {
+            return [];
+        }
+
+        const flattened = flattenPagedConfigurations(selectedItemSearch.data);
+        return flattened.map(
+            (repo) =>
+                new SuggestedRepository({
+                    configurationId: repo.id,
+                    configurationName: repo.name,
+                    url: repo.cloneUrl,
+                }),
+        );
+    }, [excludeConfigurations, selectedItemSearch.data]);
+
+    // We get the configuration by ID if one is selected
+    const selectedConfiguration = useConfiguration(selectedConfigurationId);
+    const selectedConfigurationSuggestion = useMemo(() => {
+        if (!selectedConfiguration.data) {
+            return undefined;
+        }
+
+        return new SuggestedRepository({
+            configurationId: selectedConfiguration.data.id,
+            configurationName: selectedConfiguration.data.name,
+            url: selectedConfiguration.data.cloneUrl,
+        });
+    }, [selectedConfiguration.data]);
+
+    const repos = useMemo(() => {
+        return deduplicateAndFilterRepositories(
+            searchString,
+            excludeConfigurations,
+            onlyConfigurations,
+            [unifiedRepos, selectedConfigurationSuggestion, flattenedSelectedItem].flat().filter((r) => !!r),
+        );
+    }, [
+        searchString,
+        excludeConfigurations,
+        onlyConfigurations,
+        selectedConfigurationSuggestion,
+        flattenedSelectedItem,
+        unifiedRepos,
+    ]);
 
     const authProviders = useAuthProviderDescriptions();
 
+    const usedProviders = useMemo(() => {
+        if (!user || !authProviders.data) return [];
+
+        return getDeduplicatedScmProviders(user, authProviders.data) ?? [];
+    }, [user, authProviders]);
+
     const handleSelectionChange = useCallback(
         (selectedID: string) => {
-            // selectedId is either projectId or repo url
-            const matchingSuggestion = repos?.find((repo) => {
-                if (repo.configurationId) {
-                    return repo.configurationId === selectedID;
-                }
+            const matchingSuggestion = repos?.find(
+                (repo) => repo.configurationId === selectedID || repo.url === selectedID,
+            );
 
-                return repo.url === selectedID;
-            });
             if (matchingSuggestion) {
                 onChange?.(matchingSuggestion);
                 return;
             }
 
-            onChange?.(
-                new SuggestedRepository({
-                    url: selectedID,
-                }),
-            );
+            const matchingPredefinedRepo = PREDEFINED_REPOS.find((repo) => repo.url === selectedID);
+            if (matchingPredefinedRepo) {
+                onChange?.(
+                    new SuggestedRepository({
+                        url: matchingPredefinedRepo.url,
+                        repoName: matchingPredefinedRepo.repoName,
+                    }),
+                );
+                return;
+            }
+
+            onChange?.(new SuggestedRepository({ url: selectedID }));
         },
         [onChange, repos],
     );
 
-    // Resolve the selected context url & project id props to a suggestion entry
-    const selectedSuggestion = useMemo(() => {
+    const [selectedSuggestion, setSelectedSuggestion] = useState<SuggestedRepository | undefined>(undefined);
+    const [hasStartedSearching, setHasStartedSearching] = useState(false);
+    const [isShowingExamples, setIsShowingExamples] = useState(showExamples);
+
+    // Resolve the selected context url & configurationId id props to a suggestion entry
+    useEffect(() => {
         let match = repos?.find((repo) => {
-            if (selectedProjectID) {
-                return repo.configurationId === selectedProjectID;
+            if (selectedConfigurationId) {
+                return repo.configurationId === selectedConfigurationId;
+            }
+
+            // todo(ft): normalize this more centrally
+            if (repo.url.endsWith(".git")) {
+                repo.url = repo.url.slice(0, -4);
             }
 
             return repo.url === selectedContextURL;
@@ -78,76 +214,227 @@ export default function RepositoryFinder({
 
         // If no match, it's a context url that was typed/pasted in, so treat it like a suggestion w/ just a url
         if (!match && selectedContextURL) {
-            match = new SuggestedRepository({
-                url: selectedContextURL,
-            });
+            const predefinedMatch = PREDEFINED_REPOS.find((repo) => repo.url === selectedContextURL);
+            if (predefinedMatch) {
+                match = new SuggestedRepository({
+                    url: predefinedMatch.url,
+                    repoName: predefinedMatch.repoName,
+                });
+            } else {
+                match = new SuggestedRepository({
+                    url: selectedContextURL,
+                });
+            }
         }
 
-        // This means we found a matching project, but the context url is different
-        // user may be using a pr or branch url, so we want to make sure and use that w/ the matching project
+        // This means we found a matching configuration, but the context url is different
+        // user may be using a pr or branch url, so we want to make sure and use that w/ the matching configuration
         if (match && match.configurationId && selectedContextURL && match.url !== selectedContextURL) {
             match.url = selectedContextURL;
         }
 
-        return match;
-    }, [repos, selectedContextURL, selectedProjectID]);
+        // Do not update the selected suggestion if it already has a name and the context url matches
+        // If the configurationId changes, we want to update the selected suggestion with it
+        if (selectedSuggestion) {
+            const name = selectedSuggestion.configurationName || selectedSuggestion.repoName;
+            if (name && selectedSuggestion.url === selectedContextURL) {
+                if (selectedSuggestion.configurationId === selectedConfigurationId) {
+                    return;
+                }
+            }
+        }
+
+        setSelectedSuggestion(match);
+
+        // If we put the selectedSuggestion in the dependency array, it will cause an infinite loop
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [repos, selectedContextURL, selectedConfigurationId, isShowingExamples]);
+
+    const displayName = useMemo(() => {
+        if (!selectedSuggestion) {
+            return;
+        }
+
+        if (isPredefined(selectedSuggestion)) {
+            return PREDEFINED_REPOS.find((repo) => repo.url === selectedSuggestion.url)?.repoName;
+        }
+
+        if (!selectedSuggestion?.configurationName) {
+            return displayContextUrl(selectedSuggestion?.repoName || selectedSuggestion?.url);
+        }
+
+        return selectedSuggestion?.configurationName;
+    }, [selectedSuggestion]);
+
+    const handleSearchChange = (value: string) => {
+        setSearchString(value);
+        if (value.length > 0) {
+            setIsShowingExamples(false);
+            if (!hasStartedSearching) {
+                setHasStartedSearching(true);
+            }
+        } else {
+            setIsShowingExamples(showExamples);
+        }
+    };
+
+    const filteredPredefinedRepos = useMemo(() => {
+        if (orgSuggestedRepos?.length) {
+            return orgSuggestedRepos.map((repo) => ({
+                url: repo.url,
+                repoName: repo.repoName,
+                description: "",
+                configurationId: repo.configurationId,
+            }));
+        }
+
+        return PREDEFINED_REPOS.filter((repo) => {
+            const url = new URL(repo.url);
+            const isMatchingAuthProviderAvailable =
+                authProviders.data?.some((provider) => provider.host === url.host) ?? false;
+            return isMatchingAuthProviderAvailable;
+        });
+    }, [authProviders.data, orgSuggestedRepos]);
 
     const getElements = useCallback(
-        // searchString ignore here as list is already pre-filtered against it
-        // w/ mirrored state via useUnifiedRepositorySearch
-        (searchString: string) => {
-            const result = repos.map((repo) => {
-                return {
+        (searchString: string): ComboboxElement[] => {
+            if (isShowingExamples && !onlyConfigurations) {
+                return filteredPredefinedRepos.map((repo) => ({
+                    id: repo.url,
+                    element: <PredefinedRepositoryOption repo={repo} />,
+                    isSelectable: true,
+                }));
+            }
+
+            // We deduplicate predefined repos, because we artificially add them to the list just below
+            const result = repos
+                .filter((repo) => !isPredefined(repo))
+                .map((repo) => ({
                     id: repo.configurationId || repo.url,
                     element: <SuggestedRepositoryOption repo={repo} />,
                     isSelectable: true,
-                } as ComboboxElement;
-            });
+                }));
+
+            if (!onlyConfigurations) {
+                // Add predefined repos to end of the list.
+                filteredPredefinedRepos.forEach((repo) => {
+                    if (
+                        repo.url.toLowerCase().includes(searchString.toLowerCase()) ||
+                        repo.repoName.toLowerCase().includes(searchString.toLowerCase())
+                    ) {
+                        const alreadyPresent = result.find((r) => r.id === repo.configurationId);
+                        if (!alreadyPresent) {
+                            result.push({
+                                id: repo.url,
+                                element: <PredefinedRepositoryOption repo={repo} />,
+                                isSelectable: true,
+                            });
+                        }
+                    }
+                });
+            }
+
             if (hasMore) {
-                // add an element that tells the user to refince the search
                 result.push({
                     id: "more",
                     element: (
-                        <div className="text-sm text-gray-400 dark:text-gray-500">
-                            Repo missing? Try refining your search.
-                        </div>
+                        <div className="text-sm text-pk-content-secondary">Repo missing? Try refining your search.</div>
                     ),
                     isSelectable: false,
-                } as ComboboxElement);
+                });
             }
+
             if (
-                searchString.length >= 3 &&
+                !onlyConfigurations &&
+                searchString.length > 0 &&
                 authProviders.data?.some((p) => p.type === AuthProviderType.BITBUCKET_SERVER)
             ) {
                 // add an element that tells the user that the Bitbucket Server does only support prefix search
                 result.push({
                     id: "bitbucket-server",
                     element: (
-                        <div className="text-sm text-gray-400 dark:text-gray-500">
-                            <div className="flex items-center">
-                                <Exclamation2 className="w-4 h-4"></Exclamation2>
-                                <span className="ml-2">Bitbucket Server only supports searching by prefix.</span>
-                            </div>
+                        <div className="text-sm text-pk-content-secondary flex items-center">
+                            <Exclamation2 className="w-4 h-4 mr-2" />
+                            <span>Bitbucket Server only supports searching by prefix.</span>
                         </div>
                     ),
                     isSelectable: false,
-                } as ComboboxElement);
+                });
             }
-            if (searchString.length < 3) {
-                // add an element that tells the user to type more
+
+            if (
+                !onlyConfigurations &&
+                searchString.length > 0 &&
+                searchString.length < 3 &&
+                usedProviders.includes("GitLab")
+            ) {
+                // add an element that tells the user that GitLab only does exact searches for short queries
                 result.push({
-                    id: "not-searched",
+                    id: "gitlab",
                     element: (
-                        <div className="text-sm text-gray-400 dark:text-gray-500">
-                            Please type at least 3 characters to search.
+                        <div className="text-sm text-pk-content-secondary flex items-center">
+                            <Exclamation2 className="w-4 h-4 mr-2" />
+                            <span>
+                                Search text is &lt; 3 characters. GitLab will only show exact matches for short
+                                searches.
+                            </span>
                         </div>
                     ),
                     isSelectable: false,
-                } as ComboboxElement);
+                });
             }
+
+            const setupProvidersWithoutPathSearchSupport = usedProviders.filter((p) =>
+                ["Bitbucket", "GitLab"].includes(p),
+            );
+            if (
+                !onlyConfigurations &&
+                searchString.length > 1 &&
+                setupProvidersWithoutPathSearchSupport.length > 0 &&
+                searchString.includes("/")
+            ) {
+                result.push({
+                    id: "whole-path-matching-unsupported",
+                    element: (
+                        <div className="text-sm text-pk-content-secondary flex items-center">
+                            <Exclamation2 className="w-4 h-4 mr-2" />
+                            <span>
+                                {usedProviders
+                                    ? conjunctScmProviders(setupProvidersWithoutPathSearchSupport)
+                                    : "Some providers"}{" "}
+                                only support searching by repository name, not full paths.
+                            </span>
+                        </div>
+                    ),
+                    isSelectable: false,
+                });
+            }
+
+            if (!onlyConfigurations && searchString.length > 0 && usedProviders.includes("Azure DevOps")) {
+                // CLC-780
+                result.push({
+                    id: "azure-devops",
+                    element: (
+                        <div className="text-sm text-pk-content-secondary flex items-center">
+                            <Exclamation2 className="w-4 h-4 mr-2" />
+                            <span>Azure DevOps doesn't support repository searching.</span>
+                        </div>
+                    ),
+                    isSelectable: false,
+                });
+            }
+
             return result;
         },
-        [repos, hasMore, authProviders.data],
+        [
+            isShowingExamples,
+            onlyConfigurations,
+            repos,
+            hasMore,
+            authProviders.data,
+            filteredPredefinedRepos,
+            usedProviders,
+        ],
     );
 
     return (
@@ -159,21 +446,13 @@ export default function RepositoryFinder({
             disabled={disabled}
             // Only consider the isLoading prop if we're including projects in list
             loading={isLoading || isSearching}
-            searchPlaceholder="Paste repository URL or type to find suggestions"
-            onSearchChange={setSearchString}
+            searchPlaceholder="Search repos and demos or paste a repo URL"
+            onSearchChange={handleSearchChange}
         >
             <ComboboxSelectedItem
-                icon={RepositorySVG}
+                icon={resolveIcon(selectedContextURL)}
                 htmlTitle={displayContextUrl(selectedContextURL) || "Repository"}
-                title={
-                    <div className="truncate">
-                        {displayContextUrl(
-                            selectedSuggestion?.configurationName ||
-                                selectedSuggestion?.repoName ||
-                                selectedSuggestion?.url,
-                        ) || "Select a repository"}
-                    </div>
-                }
+                title={<div className="truncate">{displayName || "Select a repository"}</div>}
                 subtitle={
                     // Only show the url if we have a project or repo name, otherwise it's redundant w/ the title
                     selectedSuggestion?.configurationName || selectedSuggestion?.repoName
@@ -199,18 +478,20 @@ const SuggestedRepositoryOption: FC<SuggestedRepositoryOptionProps> = ({ repo })
             aria-label={`${repo.configurationId ? "Project" : "Repo"}: ${repo.url}`}
         >
             <span className={"pr-2"}>
-                <RepositoryIcon className={`w-5 h-5 text-gray-400`} />
+                <RepositoryIcon className={`w-5 h-5 text-pk-content-secondary`} />
             </span>
 
             {name && (
                 <>
                     <span className="text-sm whitespace-nowrap font-semibold">{name}</span>
-                    <MiddleDot className="px-0.5 text-gray-300 dark:text-gray-500" />
+                    <MiddleDot className="px-0.5 text-pk-content-secondary" />
                 </>
             )}
 
             <span
-                className="text-sm whitespace-nowrap truncate overflow-ellipsis text-gray-500 dark:text-gray-400"
+                className={cn("text-sm whitespace-nowrap truncate overflow-ellipsis", {
+                    "text-pk-content-secondary": !!name,
+                })}
                 title={repoPath}
             >
                 {repoPath}

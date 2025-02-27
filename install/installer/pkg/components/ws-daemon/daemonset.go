@@ -203,6 +203,9 @@ func daemonset(ctx *common.RenderContext) ([]runtime.Object, error) {
 			Operator: "Exists",
 			Effect:   "NoExecute",
 		},
+		{
+			Operator: "Exists",
+		},
 	}
 
 	podSpec := corev1.PodSpec{
@@ -228,7 +231,7 @@ func daemonset(ctx *common.RenderContext) ([]runtime.Object, error) {
 				)),
 				Resources: common.ResourceRequirements(ctx, Component, Component, corev1.ResourceRequirements{Requests: corev1.ResourceList{
 					"cpu":    resource.MustParse("500m"),
-					"memory": resource.MustParse("4Gi"),
+					"memory": resource.MustParse("2Gi"),
 				}}),
 				VolumeMounts:    volumeMounts,
 				ImagePullPolicy: corev1.PullIfNotPresent,

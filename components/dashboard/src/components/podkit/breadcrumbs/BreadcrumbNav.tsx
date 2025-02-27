@@ -19,7 +19,7 @@ interface BreadcrumbPageNavProps {
     /**
      * The description of the current page.
      */
-    pageDescription?: string;
+    pageDescription?: React.ReactNode;
     /**
      * The link to the previous page.
      */
@@ -33,7 +33,7 @@ export const BreadcrumbNav: FC<BreadcrumbPageNavProps> = ({ pageTitle, pageDescr
             {backLink && (
                 <LinkButton
                     variant={"ghost"}
-                    className="py-1 pl-0 pr-2 hover:bg-gray-200 dark:hover:bg-gray-800 dark:hover:text-gray-200 flex flex-row gap-1 items-center"
+                    className="py-1 pl-0 pr-1 text-content-primary hover:bg-pk-surface-tertiary flex flex-row gap-1 items-center"
                     href={backLink}
                 >
                     <ChevronLeft size={24} />
@@ -42,8 +42,8 @@ export const BreadcrumbNav: FC<BreadcrumbPageNavProps> = ({ pageTitle, pageDescr
                     </Heading3>
                 </LinkButton>
             )}
-            <MiddleDot />
-            <p className="text-pk-content-primary text-lg">{pageDescription}</p>
+            <MiddleDot className="font-bold" />
+            <p className="text-pk-content-primary text-lg pl-1">{pageDescription}</p>
         </section>
     );
 };

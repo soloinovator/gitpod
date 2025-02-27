@@ -20,6 +20,10 @@ import {
     PrebuildInfo,
     AdminGetWorkspacesQuery,
     SnapshotState,
+    WorkspaceSession,
+    PrebuiltWorkspaceWithWorkspace,
+    PrebuildWithStatus,
+    WorkspaceInstanceMetrics,
 } from "@gitpod/gitpod-protocol";
 
 export type MaybeWorkspace = Workspace | undefined;
@@ -48,13 +52,6 @@ export interface WorkspacePortsAuthData {
     workspace: WorkspaceAuthData;
 }
 
-export type WorkspaceInstanceSession = Pick<WorkspaceInstance, "id" | "startedTime" | "stoppingTime" | "stoppedTime">;
-export type WorkspaceSessionData = Pick<Workspace, "id" | "contextURL" | "context" | "type">;
-export interface WorkspaceInstanceSessionWithWorkspace {
-    instance: WorkspaceInstanceSession;
-    workspace: WorkspaceSessionData;
-}
-
 export interface PrebuildWithWorkspace {
     prebuild: PrebuiltWorkspace;
     workspace: Workspace;
@@ -68,6 +65,8 @@ export interface PrebuildWithWorkspaceAndInstances {
 
 export type WorkspaceAndOwner = Pick<Workspace, "id" | "ownerId">;
 export type WorkspaceOwnerAndSoftDeleted = Pick<Workspace, "id" | "ownerId" | "softDeleted">;
+export type WorkspaceOwnerAndDeletionEligibility = Pick<Workspace, "id" | "ownerId" | "deletionEligibilityTime">;
+export type WorkspaceOwnerAndContentDeletedTime = Pick<Workspace, "id" | "ownerId" | "contentDeletedTime">;
 
 export const WorkspaceDB = Symbol("WorkspaceDB");
 export interface WorkspaceDB {
@@ -96,11 +95,17 @@ export interface WorkspaceDB {
     findCurrentInstance(workspaceId: string): Promise<MaybeWorkspaceInstance>;
     findRunningInstance(workspaceId: string): Promise<MaybeWorkspaceInstance>;
     findSessionsInPeriod(
-        userId: string,
-        periodStart: string,
-        periodEnd: string,
-    ): Promise<WorkspaceInstanceSessionWithWorkspace[]>;
-    findWorkspacesForGarbageCollection(minAgeInDays: number, limit: number): Promise<WorkspaceAndOwner[]>;
+        organizationId: string,
+        periodStart: Date,
+        periodEnd: Date,
+        limit: number,
+        offset: number,
+    ): Promise<WorkspaceSession[]>;
+    findEligibleWorkspacesForSoftDeletion(
+        cutOffDate?: Date,
+        limit?: number,
+        type?: WorkspaceType,
+    ): Promise<WorkspaceOwnerAndDeletionEligibility[]>;
     findWorkspacesForContentDeletion(
         minSoftDeletedTimeInDays: number,
         limit: number,
@@ -109,8 +114,7 @@ export interface WorkspaceDB {
         minContentDeletionTimeInDays: number,
         limit: number,
         now: Date,
-    ): Promise<WorkspaceAndOwner[]>;
-    findPrebuiltWorkspacesForGC(daysUnused: number, limit: number): Promise<WorkspaceAndOwner[]>;
+    ): Promise<WorkspaceOwnerAndContentDeletedTime[]>;
     findAllWorkspaces(
         offset: number,
         limit: number,
@@ -159,6 +163,7 @@ export interface WorkspaceDB {
         branch: string,
     ): Promise<PrebuildWithWorkspaceAndInstances[]>;
     findPrebuildsWithWorkspace(projectId: string): Promise<PrebuildWithWorkspace[]>;
+    findPrebuildWithStatus(prebuildId: string): Promise<PrebuildWithStatus | undefined>;
     findPrebuildByWorkspaceID(wsid: string): Promise<PrebuiltWorkspace | undefined>;
     findPrebuildByID(pwsid: string): Promise<PrebuiltWorkspace | undefined>;
     countUnabortedPrebuildsSince(projectId: string, date: Date): Promise<number>;
@@ -169,9 +174,35 @@ export interface WorkspaceDB {
 
     hardDeleteWorkspace(workspaceID: string): Promise<void>;
 
-    findPrebuiltWorkspacesByProject(projectId: string, branch?: string, limit?: number): Promise<PrebuiltWorkspace[]>;
+    findPrebuiltWorkspacesByOrganization(
+        organizationId: string,
+        pagination: {
+            offset: number;
+            limit: number;
+        },
+        filter: {
+            configuration?: {
+                id: string;
+                branch?: string;
+            };
+            state?: "succeeded" | "failed" | "unfinished";
+            searchTerm?: string;
+        },
+        sort: {
+            field: string;
+            order: "ASC" | "DESC";
+        },
+    ): Promise<PrebuiltWorkspaceWithWorkspace[]>;
     findPrebuiltWorkspaceById(prebuildId: string): Promise<PrebuiltWorkspace | undefined>;
 
     storePrebuildInfo(prebuildInfo: PrebuildInfo): Promise<void>;
     findPrebuildInfos(prebuildIds: string[]): Promise<PrebuildInfo[]>;
+
+    storeMetrics(instanceId: string, metrics: WorkspaceInstanceMetrics): Promise<WorkspaceInstanceMetrics>;
+    getMetrics(instanceId: string): Promise<WorkspaceInstanceMetrics | undefined>;
+    updateMetrics(
+        instanceId: string,
+        update: WorkspaceInstanceMetrics,
+        merge: (current: WorkspaceInstanceMetrics, update: WorkspaceInstanceMetrics) => WorkspaceInstanceMetrics,
+    ): Promise<WorkspaceInstanceMetrics>;
 }

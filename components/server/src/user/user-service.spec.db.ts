@@ -26,21 +26,20 @@ describe("UserService", async () => {
     let orgService: OrganizationService;
     let auth: Authorizer;
     let org: Organization;
+    let owner: User;
     let user: User;
     let user2: User;
     let nonOrgUser: User;
 
     beforeEach(async () => {
         container = createTestContainer();
-        Experiments.configureTestingClient({
-            centralizedPermissions: true,
-        });
+        Experiments.configureTestingClient({});
         userService = container.get<UserService>(UserService);
         auth = container.get(Authorizer);
         orgService = container.get<OrganizationService>(OrganizationService);
         org = await orgService.createOrganization(BUILTIN_INSTLLATION_ADMIN_USER_ID, "myOrg");
-        const invite = await orgService.getOrCreateInvite(BUILTIN_INSTLLATION_ADMIN_USER_ID, org.id);
-        user = await userService.createUser({
+        // first not builtin user join an org will be an owner
+        owner = await orgService.createOrgOwnedUser({
             organizationId: org.id,
             identity: {
                 authId: "foo",
@@ -49,9 +48,8 @@ describe("UserService", async () => {
                 primaryEmail: "yolo@yolo.com",
             },
         });
-        await orgService.joinOrganization(user.id, invite.id);
 
-        user2 = await userService.createUser({
+        user = await orgService.createOrgOwnedUser({
             organizationId: org.id,
             identity: {
                 authId: "foo",
@@ -60,7 +58,16 @@ describe("UserService", async () => {
                 primaryEmail: "yolo@yolo.com",
             },
         });
-        await orgService.joinOrganization(user2.id, invite.id);
+
+        user2 = await orgService.createOrgOwnedUser({
+            organizationId: org.id,
+            identity: {
+                authId: "foo",
+                authName: "bar",
+                authProviderId: "github",
+                primaryEmail: "yolo@yolo.com",
+            },
+        });
 
         nonOrgUser = await userService.createUser({
             identity: {
@@ -75,6 +82,8 @@ describe("UserService", async () => {
     afterEach(async () => {
         const typeorm = container.get(TypeORM);
         await resetDB(typeorm);
+        // Deactivate all services
+        await container.unbindAllAsync();
     });
 
     it("createUser", async () => {
@@ -189,12 +198,13 @@ describe("UserService", async () => {
 
     it("should listUsers", async () => {
         let users = await userService.listUsers(user.id, {});
-        expect(users.total).to.eq(2);
+        expect(users.total).to.eq(3);
         expect(users.rows.some((u) => u.id === user.id)).to.be.true;
         expect(users.rows.some((u) => u.id === user2.id)).to.be.true;
 
         users = await userService.listUsers(BUILTIN_INSTLLATION_ADMIN_USER_ID, {});
-        expect(users.total).to.eq(4);
+        expect(users.total).to.eq(5);
+        expect(users.rows.some((u) => u.id === owner.id)).to.be.true;
         expect(users.rows.some((u) => u.id === user.id)).to.be.true;
         expect(users.rows.some((u) => u.id === user2.id)).to.be.true;
         expect(users.rows.some((u) => u.id === nonOrgUser.id)).to.be.true;

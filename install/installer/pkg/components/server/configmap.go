@@ -172,18 +172,10 @@ func configmap(ctx *common.RenderContext) ([]runtime.Object, error) {
 		return nil
 	})
 
-	showSetupModal := true // old default to make self-hosted continue to work!
-	_ = ctx.WithExperimental(func(cfg *experimental.Config) error {
-		if cfg.WebApp != nil && cfg.WebApp.Server != nil && cfg.WebApp.Server.ShowSetupModal != nil {
-			showSetupModal = *cfg.WebApp.Server.ShowSetupModal
-		}
-		return nil
-	})
-
-	var isSingleOrgInstallation bool
+	var isDedicatedInstallation bool
 	_ = ctx.WithExperimental(func(cfg *experimental.Config) error {
 		if cfg.WebApp != nil && cfg.WebApp.Server != nil {
-			isSingleOrgInstallation = cfg.WebApp.Server.IsSingleOrgInstallation
+			isDedicatedInstallation = cfg.WebApp.Server.IsDedicatedInstallation || cfg.WebApp.Server.IsSingleOrgInstallation
 		}
 		return nil
 	})
@@ -225,12 +217,12 @@ func configmap(ctx *common.RenderContext) ([]runtime.Object, error) {
 		GitHubApp:            githubApp,
 		WorkspaceGarbageCollection: WorkspaceGarbageCollection{
 			Disabled:                   disableWsGarbageCollection,
-			IntervalSeconds:            1 * 60 * 60, // 1 hour
+			IntervalSeconds:            1 * 60 * 30, // 30 minutes
 			MinAgeDays:                 14,
 			MinAgePrebuildDays:         7,
 			ChunkLimit:                 1000,
 			ContentRetentionPeriodDays: 21,
-			ContentChunkLimit:          100,
+			ContentChunkLimit:          3000,
 			PurgeRetentionPeriodDays:   365,
 			PurgeChunkLimit:            5000,
 		},
@@ -296,10 +288,9 @@ func configmap(ctx *common.RenderContext) ([]runtime.Object, error) {
 		Admin: AdminConfig{
 			CredentialsPath: adminCredentialsPath,
 		},
-		ShowSetupModal:          showSetupModal,
 		Auth:                    authCfg,
 		Redis:                   redisConfig,
-		IsSingleOrgInstallation: isSingleOrgInstallation,
+		IsDedicatedInstallation: isDedicatedInstallation,
 	}
 
 	fc, err := common.ToJSONString(scfg)

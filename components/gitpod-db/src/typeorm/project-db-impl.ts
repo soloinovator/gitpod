@@ -69,9 +69,20 @@ export class ProjectDBImpl extends TransactionalDBImpl<ProjectDB> implements Pro
         return repo.find(conditions);
     }
 
-    public async findProjects(orgId: string): Promise<Project[]> {
+    public async findProjects(orgId: string, limit?: number): Promise<Project[]> {
         const repo = await this.getRepo();
-        return repo.find({ where: { teamId: orgId, markedDeleted: false }, order: { name: "ASC" } });
+
+        const queryBuilder = repo
+            .createQueryBuilder("project")
+            .where("project.teamId = :teamId", { teamId: orgId })
+            .orderBy("project.creationTime", "DESC")
+            .andWhere("project.markedDeleted = false");
+
+        if (limit) {
+            queryBuilder.take(limit);
+        }
+
+        return queryBuilder.getMany();
     }
 
     public async findProjectsBySearchTerm({
@@ -155,12 +166,12 @@ export class ProjectDBImpl extends TransactionalDBImpl<ProjectDB> implements Pro
         await projectUsageRepo.delete({ projectId });
     }
 
-    public async findProjectEnvironmentVariable(
+    public async findProjectEnvironmentVariableByName(
         projectId: string,
-        envVar: ProjectEnvVarWithValue,
+        name: string,
     ): Promise<ProjectEnvVar | undefined> {
         const envVarRepo = await this.getProjectEnvVarRepo();
-        return envVarRepo.findOne({ projectId, name: envVar.name, deleted: false });
+        return envVarRepo.findOne({ projectId, name, deleted: false });
     }
 
     public async addProjectEnvironmentVariable(
@@ -211,11 +222,11 @@ export class ProjectDBImpl extends TransactionalDBImpl<ProjectDB> implements Pro
         return envVars;
     }
 
-    public async getProjectEnvironmentVariableById(variableId: string): Promise<ProjectEnvVar | undefined> {
+    public async getProjectEnvironmentVariableById(id: string): Promise<ProjectEnvVar | undefined> {
         const envVarRepo = await this.getProjectEnvVarRepo();
-        const envVarWithValue = await envVarRepo.findOne({ id: variableId, deleted: false });
+        const envVarWithValue = await envVarRepo.findOne({ id, deleted: false });
         if (!envVarWithValue) {
-            return;
+            return undefined;
         }
         const envVar = toProjectEnvVar(envVarWithValue);
         return envVar;
@@ -223,17 +234,16 @@ export class ProjectDBImpl extends TransactionalDBImpl<ProjectDB> implements Pro
 
     public async deleteProjectEnvironmentVariable(variableId: string): Promise<void> {
         const envVarRepo = await this.getProjectEnvVarRepo();
-        const envVarWithValue = await envVarRepo.findOne({ id: variableId, deleted: false });
-        if (!envVarWithValue) {
-            throw new Error("A environment variable with this name could not be found for this project");
-        }
-        envVarWithValue.deleted = true;
-        await envVarRepo.update({ id: envVarWithValue.id, projectId: envVarWithValue.projectId }, envVarWithValue);
+        await envVarRepo.delete({ id: variableId });
     }
 
-    public async getProjectEnvironmentVariableValues(envVars: ProjectEnvVar[]): Promise<ProjectEnvVarWithValue[]> {
+    public async getProjectEnvironmentVariableValues(
+        envVars: Pick<ProjectEnvVar, "id" | "projectId">[],
+    ): Promise<ProjectEnvVarWithValue[]> {
         const envVarRepo = await this.getProjectEnvVarRepo();
-        const envVarsWithValues = await envVarRepo.findByIds(envVars);
+        const envVarsWithValues = await envVarRepo.findByIds(
+            envVars.map((v) => ({ id: v.id, projectId: v.projectId })),
+        );
         return envVarsWithValues;
     }
 

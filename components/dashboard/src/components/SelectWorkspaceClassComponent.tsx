@@ -7,43 +7,108 @@
 import { FC, useCallback, useEffect, useMemo } from "react";
 import WorkspaceClassIcon from "../icons/WorkspaceClass.svg";
 import { Combobox, ComboboxElement, ComboboxSelectedItem } from "./podkit/combobox/Combobox";
-import { useWorkspaceClasses } from "../data/workspaces/workspace-classes-query";
 import { WorkspaceClass } from "@gitpod/public-api/lib/gitpod/v1/workspace_pb";
+import { useAllowedWorkspaceClassesMemo } from "../data/workspaces/workspace-classes-query";
+import { PlainMessage } from "@bufbuild/protobuf";
+import { Link } from "react-router-dom";
+import { repositoriesRoutes } from "../repositories/repositories.routes";
+import { isGitpodIo } from "../utils";
 
 interface SelectWorkspaceClassProps {
+    selectedConfigurationId?: string;
     selectedWorkspaceClass?: string;
     onSelectionChange: (workspaceClass: string) => void;
-    setError?: (error?: string) => void;
+    setError?: (error?: React.ReactNode) => void;
     disabled?: boolean;
     loading?: boolean;
 }
 
 export default function SelectWorkspaceClassComponent({
+    selectedConfigurationId,
     selectedWorkspaceClass,
     disabled,
     loading,
     setError,
     onSelectionChange,
 }: SelectWorkspaceClassProps) {
-    const { data: workspaceClasses, isLoading: workspaceClassesLoading } = useWorkspaceClasses();
+    const { data: workspaceClasses, isLoading: workspaceClassesLoading } = useAllowedWorkspaceClassesMemo(
+        selectedConfigurationId,
+        {
+            filterOutDisabled: true,
+        },
+    );
 
     const getElements = useCallback((): ComboboxElement[] => {
-        return (workspaceClasses || [])?.map((c) => ({
+        const elements = (workspaceClasses || [])?.map((c) => ({
             id: c.id,
             element: <WorkspaceClassDropDownElement wsClass={c} />,
             isSelectable: true,
         }));
+        if (isGitpodIo()) {
+            elements.push({
+                id: "learn-more",
+                element: (
+                    <div className="px-1 py-2 text-sm text-pk-content-tertiary">
+                        <span>Need more classes? </span>
+                        <a
+                            className="text-sm gp-link"
+                            href="https://www.gitpod.io/docs/enterprise"
+                            target="_blank"
+                            rel="noreferrer"
+                        >
+                            Learn about Gitpod Enterprise
+                        </a>
+                    </div>
+                ),
+                isSelectable: false,
+            });
+        }
+        return elements;
     }, [workspaceClasses]);
 
     useEffect(() => {
-        if (!workspaceClasses) {
+        if (!workspaceClasses || loading || disabled || workspaceClassesLoading) {
+            return;
+        }
+
+        if (workspaceClasses.length === 0) {
+            const repoWorkspaceSettingsLink =
+                selectedConfigurationId && repositoriesRoutes.WorkspaceSettings(selectedConfigurationId);
+            const teamSettingsLink = "/settings";
+            setError?.(
+                <>
+                    No allowed workspace classes available. Please contact an admin to update{" "}
+                    <Link className="underline" to={teamSettingsLink}>
+                        organization settings
+                    </Link>
+                    {repoWorkspaceSettingsLink && (
+                        <>
+                            {" or "}
+                            <Link className="underline" to={repoWorkspaceSettingsLink}>
+                                configuration settings
+                            </Link>
+                        </>
+                    )}
+                    .
+                </>,
+            );
             return;
         }
         // if the selected workspace class is not supported, we set an error and ask the user to pick one
         if (selectedWorkspaceClass && !workspaceClasses?.find((c) => c.id === selectedWorkspaceClass)) {
             setError?.(`The workspace class '${selectedWorkspaceClass}' is not supported.`);
+        } else {
+            setError?.(undefined);
         }
-    }, [workspaceClasses, selectedWorkspaceClass, setError]);
+    }, [
+        loading,
+        workspaceClassesLoading,
+        disabled,
+        workspaceClasses,
+        selectedWorkspaceClass,
+        setError,
+        selectedConfigurationId,
+    ]);
     const internalOnSelectionChange = useCallback(
         (id: string) => {
             onSelectionChange(id);
@@ -78,7 +143,7 @@ export default function SelectWorkspaceClassComponent({
 }
 
 type WorkspaceClassDropDownElementSelectedProps = {
-    wsClass?: WorkspaceClass;
+    wsClass?: PlainMessage<WorkspaceClass>;
     loading?: boolean;
 };
 
@@ -106,7 +171,7 @@ const WorkspaceClassDropDownElementSelected: FC<WorkspaceClassDropDownElementSel
     );
 };
 
-function WorkspaceClassDropDownElement(props: { wsClass: WorkspaceClass }): JSX.Element {
+function WorkspaceClassDropDownElement(props: { wsClass: PlainMessage<WorkspaceClass> }): JSX.Element {
     const c = props.wsClass;
     return (
         <div className="flex ml-1 mt-1 flex-grow">

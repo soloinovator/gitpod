@@ -22,6 +22,7 @@ import (
 	wsmanagerbridge "github.com/gitpod-io/gitpod/installer/pkg/components/ws-manager-bridge"
 	"github.com/gitpod-io/gitpod/installer/pkg/config/v1/experimental"
 
+	"github.com/gitpod-io/gitpod/common-go/kubernetes"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -135,6 +136,16 @@ func deployment(ctx *common.RenderContext) ([]runtime.Object, error) {
 						Key: "password",
 					},
 				},
+			})
+		}
+		return nil
+	})
+
+	_ = ctx.WithExperimental(func(cfg *experimental.Config) error {
+		if cfg.WebApp != nil && cfg.WebApp.Server != nil && cfg.WebApp.Server.GoogleCloudProfilerEnabled {
+			env = append(env, corev1.EnvVar{
+				Name:  "GOOGLE_CLOUD_PROFILER",
+				Value: "true",
 			})
 		}
 		return nil
@@ -284,6 +295,8 @@ func deployment(ctx *common.RenderContext) ([]runtime.Object, error) {
 	volumes = append(volumes, authVolumes...)
 	volumeMounts = append(volumeMounts, authMounts...)
 
+	imageName := ctx.ImageName(ctx.Config.Repository, Component, ctx.VersionManifest.Components.Server.Version)
+
 	return []runtime.Object{
 		&appsv1.Deployment{
 			TypeMeta: common.TypeMetaDeployment,
@@ -305,6 +318,7 @@ func deployment(ctx *common.RenderContext) ([]runtime.Object, error) {
 						Annotations: common.CustomizeAnnotation(ctx, Component, common.TypeMetaDeployment, func() map[string]string {
 							return map[string]string{
 								common.AnnotationConfigChecksum: configHash,
+								kubernetes.ImageNameAnnotation:  imageName,
 							}
 						}),
 					},
@@ -335,7 +349,7 @@ func deployment(ctx *common.RenderContext) ([]runtime.Object, error) {
 						},
 						Containers: []corev1.Container{{
 							Name:            Component,
-							Image:           ctx.ImageName(ctx.Config.Repository, Component, ctx.VersionManifest.Components.Server.Version),
+							Image:           imageName,
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Resources: common.ResourceRequirements(ctx, Component, Component, corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{

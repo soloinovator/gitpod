@@ -8,8 +8,8 @@ import { User, Token } from "@gitpod/gitpod-protocol";
 import { UnauthorizedError } from "../errors";
 import { AuthProviderParams } from "../auth/auth-provider";
 import { injectable, inject } from "inversify";
-import { GitLabScope } from "./scopes";
 import { TokenProvider } from "../user/token-provider";
+import { GitLabOAuthScopes } from "@gitpod/public-api-common/lib/auth-providers";
 
 @injectable()
 export class GitLabTokenHelper {
@@ -37,9 +37,15 @@ export class GitLabTokenHelper {
             console.error(e);
         }
         if (requiredScopes.length === 0) {
-            requiredScopes = GitLabScope.Requirements.DEFAULT;
+            requiredScopes = GitLabOAuthScopes.Requirements.DEFAULT;
         }
-        throw UnauthorizedError.create(host, requiredScopes, "missing-identity");
+        throw UnauthorizedError.create({
+            host,
+            providerType: "GitLab",
+            requiredScopes: GitLabOAuthScopes.Requirements.DEFAULT,
+            providerIsConnected: false,
+            isMissingScopes: true,
+        });
     }
     protected containsScopes(token: Token, wantedScopes: string[] | undefined): boolean {
         const set = new Set(wantedScopes);

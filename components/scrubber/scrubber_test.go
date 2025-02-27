@@ -112,16 +112,18 @@ func TestStruct(t *testing.T) {
 				Email        string
 				Password     string
 				WorkspaceID  string
+				ContextURL   string
 				LeaveMeAlone string
-			}{Username: "foo", Email: "foo@bar.com", Password: "foobar", WorkspaceID: "gitpodio-gitpod-uesaddev73c", LeaveMeAlone: "foo"},
+			}{Username: "foo", Email: "foo@bar.com", Password: "foobar", WorkspaceID: "gitpodio-gitpod-uesaddev73c", ContextURL: "https://github.com/gitpod-io/gitpod/pull/19402", LeaveMeAlone: "foo"},
 			Expectation: Expectation{
 				Result: &struct {
 					Username     string
 					Email        string
 					Password     string
 					WorkspaceID  string
+					ContextURL   string
 					LeaveMeAlone string
-				}{Username: "[redacted:md5:acbd18db4cc2f85cedef654fccc4a4d8]", Email: "[redacted]", Password: "[redacted]", WorkspaceID: "[redacted:md5:a35538939333def8477b5c19ac694b35]", LeaveMeAlone: "foo"},
+				}{Username: "[redacted:md5:acbd18db4cc2f85cedef654fccc4a4d8]", Email: "[redacted]", Password: "[redacted]", WorkspaceID: "[redacted:md5:a35538939333def8477b5c19ac694b35]", ContextURL: "[redacted:md5:3097fca9b1ec8942c4305e550ef1b50a]/[redacted:md5:308cb0f82b8a4966a32f7c360315c160]/[redacted:md5:5bc8d0354fba47db774b70d2a9161bbb]/pull/19402", LeaveMeAlone: "foo"},
 			},
 		},
 		{
@@ -441,6 +443,42 @@ func TestDeepCopyStruct(t *testing.T) {
 				},
 			},
 			CmpOpts: []cmp.Option{cmpopts.IgnoreUnexported(UnexportedStructToTest{})},
+		},
+		{
+			Name: "nil interface",
+			Struct: &struct {
+				Hashed       string `scrub:"hash"`
+				NilInterface interface{}
+			}{
+				Hashed: "foo",
+			},
+			Expectation: Expectation{
+				Result: &struct {
+					Hashed       string `scrub:"hash"`
+					NilInterface interface{}
+				}{
+					Hashed:       "[redacted:md5:acbd18db4cc2f85cedef654fccc4a4d8]",
+					NilInterface: nil,
+				},
+			},
+		},
+		{
+			Name: "nil point interface",
+			Struct: &struct {
+				Hashed       string `scrub:"hash"`
+				NilInterface *string
+			}{
+				Hashed: "foo",
+			},
+			Expectation: Expectation{
+				Result: &struct {
+					Hashed       string `scrub:"hash"`
+					NilInterface *string
+				}{
+					Hashed:       "[redacted:md5:acbd18db4cc2f85cedef654fccc4a4d8]",
+					NilInterface: nil,
+				},
+			},
 		},
 	}
 

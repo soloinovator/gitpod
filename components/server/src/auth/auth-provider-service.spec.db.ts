@@ -10,7 +10,7 @@ import { Experiments } from "@gitpod/gitpod-protocol/lib/experiments/configcat-s
 import * as chai from "chai";
 import { Container } from "inversify";
 import "mocha";
-import { createTestContainer } from "../test/service-testing-container-module";
+import { createTestContainer, withTestCtx } from "../test/service-testing-container-module";
 import { resetDB } from "@gitpod/gitpod-db/lib/test/reset-db";
 import { UserService } from "../user/user-service";
 import { AuthProviderService } from "./auth-provider-service";
@@ -20,6 +20,7 @@ import { expectError } from "../test/expect-utils";
 import { AuthProviderEntry } from "@gitpod/gitpod-protocol";
 import { AuthProviderParams } from "./auth-provider";
 import { OrganizationService } from "../orgs/organization-service";
+import { SYSTEM_USER } from "../authorization/authorizer";
 
 const expect = chai.expect;
 
@@ -109,9 +110,7 @@ describe("AuthProviderService", async () => {
 
     beforeEach(async () => {
         container = createTestContainer();
-        Experiments.configureTestingClient({
-            centralizedPermissions: true,
-        });
+        Experiments.configureTestingClient({});
         service = container.get(AuthProviderService);
         userService = container.get<UserService>(UserService);
         currentUser = await userService.createUser({
@@ -128,6 +127,8 @@ describe("AuthProviderService", async () => {
     afterEach(async () => {
         // Clean-up database
         await resetDB(container.get(TypeORM));
+        // Deactivate all services
+        await container.unbindAllAsync();
     });
 
     describe("createAuthProviderOfUser", async () => {
@@ -318,7 +319,7 @@ describe("AuthProviderService", async () => {
                 },
             });
             const invite = await orgService.getOrCreateInvite(currentUser.id, org.id);
-            await orgService.joinOrganization(member.id, invite.id);
+            await withTestCtx(SYSTEM_USER, () => orgService.joinOrganization(member.id, invite.id));
 
             const created = await service.createOrgAuthProvider(currentUser.id, newOrgEntry());
             await service.markAsVerified({ userId: currentUser.id, id: created.id });
@@ -348,7 +349,7 @@ describe("AuthProviderService", async () => {
                 },
             });
             const invite = await orgService.getOrCreateInvite(currentUser.id, org.id);
-            await orgService.joinOrganization(member.id, invite.id);
+            await withTestCtx(SYSTEM_USER, () => orgService.joinOrganization(member.id, invite.id));
 
             const created = await service.createOrgAuthProvider(currentUser.id, newOrgEntry());
             await service.markAsVerified({ userId: currentUser.id, id: created.id });
